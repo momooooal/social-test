@@ -18,17 +18,24 @@ export function interactionsForCampaign(data: WorkspaceData, campaignId: string)
   return data.interactions.filter((item) => effectiveInteractionCampaignId(item) === campaignId);
 }
 
+
+export function peopleMetricValue(content: SocialContent) {
+  if (content.platform === 'Threads' && content.threadsInsights?.viewers !== undefined) return Number(content.threadsInsights.viewers || 0);
+  return Number(content.reach || 0);
+}
+
 export function calculateCampaignMetrics(data: WorkspaceData, campaign: Campaign) {
   const contents = contentsForCampaign(data, campaign.id);
   const interactions = interactionsForCampaign(data, campaign.id);
   const sum = (key: keyof SocialContent) => contents.reduce((total, item) => total + Number(item[key] ?? 0), 0);
   const platform = (name: string) => {
     const rows = contents.filter((item) => item.platform === name);
-    return { contentCount: rows.length, reach: rows.reduce((t, x) => t + x.reach, 0), views: rows.reduce((t, x) => t + x.views, 0), engagement: rows.reduce((t, x) => t + x.engagement, 0) };
+    return { contentCount: rows.length, reach: rows.reduce((t, x) => t + x.reach, 0), people: rows.reduce((t, x) => t + peopleMetricValue(x), 0), views: rows.reduce((t, x) => t + x.views, 0), engagement: rows.reduce((t, x) => t + x.engagement, 0) };
   };
   const conversationCount = interactions.reduce((total, item) => total + Number(item.conversationCount ?? (item.anonymousConversationId ? 1 : 0)), 0);
   const messageCount = interactions.reduce((total, item) => total + Number(item.messageCount ?? 1), 0);
   const reach = sum('reach');
+  const peopleCount = contents.reduce((total, item) => total + peopleMetricValue(item), 0);
   const engagement = sum('engagement');
   return {
     contentCount: contents.length,
@@ -36,7 +43,7 @@ export function calculateCampaignMetrics(data: WorkspaceData, campaign: Campaign
     viewsMissingContentCount: contents.filter((item) => !metricDisplay(item, 'views').available).length,
     reachKnownContentCount: contents.filter((item) => metricDisplay(item, 'reach').available).length,
     reachMissingContentCount: contents.filter((item) => !metricDisplay(item, 'reach').available).length,
-    views: sum('views'), reach, impressions: sum('impressions'), engagement,
+    views: sum('views'), reach, peopleCount, impressions: sum('impressions'), engagement,
     engagementRate: reach ? engagement / reach * 100 : 0,
     likes: sum('likes'), comments: sum('comments'), shares: sum('shares'), saves: sum('saves'), clicks: sum('clicks'),
     messages: sum('messages'), conversationCount, messageCount,

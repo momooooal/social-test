@@ -52,6 +52,41 @@ export interface Campaign {
   needsReview?: boolean;
 }
 
+
+export interface ThreadsPostInsights {
+  viewers?: number;
+  profileViews?: number;
+  follows?: number;
+  rates?: {
+    like?: number;
+    reply?: number;
+    share?: number;
+    quote?: number;
+    repost?: number;
+  };
+  trafficSources?: {
+    home?: number;
+    search?: number;
+    profile?: number;
+    activityTab?: number;
+  };
+  benchmarks?: {
+    views?: string;
+    profileViews?: string;
+    viewers?: string;
+    follows?: string;
+    likeRate?: string;
+    replyRate?: string;
+    shareRate?: string;
+    quoteRate?: string;
+    repostRate?: string;
+  };
+  capturedAt?: string;
+  sourceUrl?: string;
+  accountHandle?: string;
+  tagNames?: string[];
+}
+
 export interface SocialContent {
   id: string;
   platform: PlatformName;
@@ -92,6 +127,7 @@ export interface SocialContent {
   sourceMetricNotes?: string[];
   sourceRowCount?: number;
   metricAvailability?: { views?: boolean; reach?: boolean; impressions?: boolean; engagement?: boolean };
+  threadsInsights?: ThreadsPostInsights;
 }
 
 export interface Interaction {

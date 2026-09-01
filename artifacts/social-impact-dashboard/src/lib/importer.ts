@@ -1,4 +1,4 @@
-import type { Interaction, SocialContent } from './workspace-types';
+import type { Interaction, SocialContent, ThreadsPostInsights } from './workspace-types';
 
 function normHeader(value: string) {
   return value.normalize('NFKC').toLowerCase().replace(/[\s_\-()（）/]/g, '');
@@ -354,7 +354,6 @@ function parseLooseMetric(block: string, labels: string[]) {
       if (after) return numeric(after[1]);
       const before = line.match(new RegExp(`^([\\d,.]+(?:\\.\\d+)?(?:萬|[kK])?)\\s*${escaped}$`, 'i'));
       if (before) return numeric(before[1]);
-      // Some copied pages add small separators or labels on the same line.
       const looseAfter = line.match(new RegExp(`${escaped}\\s*[:：]?\\s*([\\d,.]+(?:\\.\\d+)?(?:萬|[kK])?)`, 'i'));
       if (looseAfter) return numeric(looseAfter[1]);
       const looseBefore = line.match(new RegExp(`([\\d,.]+(?:\\.\\d+)?(?:萬|[kK])?)\\s*${escaped}`, 'i'));
@@ -364,37 +363,196 @@ function parseLooseMetric(block: string, labels: string[]) {
   return 0;
 }
 
-/**
- * GitHub Pages cannot read another logged-in Threads tab because of browser same-origin rules.
- * This parser accepts text copied from the visible Threads Insights page (or a .txt export).
- */
-export function parseThreadsInsightsText(text: string): { contents: SocialContent[]; warnings: string[] } {
-  const normalized = text.replace(/\r/g, '').trim();
-  if (!normalized) return { contents: [], warnings: ['尚未貼上 Threads 洞察內容。'] };
-  let blocks = normalized.split(/\n\s*\n|\n-{3,}\n/).map((x) => x.trim()).filter(Boolean);
-  if (blocks.length === 1) {
-    const urls = [...normalized.matchAll(/https?:\/\/(?:www\.)?threads\.(?:net|com)\/[^\s]+/gi)];
-    if (urls.length > 1) {
-      blocks = urls.map((match, i) => normalized.slice(match.index ?? 0, urls[i + 1]?.index ?? normalized.length).trim());
-    }
-  }
-  const contents: SocialContent[] = [];
-  blocks.forEach((block, index) => {
-    const url = block.match(/https?:\/\/(?:www\.)?threads\.(?:net|com)\/[^\s]+/i)?.[0]?.replace(/[),，。]+$/, '') ?? '';
-    const views = parseLooseMetric(block, ['Views','瀏覽次數','瀏覽','觀看次數','觀看']);
-    const likes = parseLooseMetric(block, ['Likes','按讚數','讚']);
-    const comments = parseLooseMetric(block, ['Replies','回覆','留言數','留言']);
-    const shares = parseLooseMetric(block, ['Reposts','轉發','Repost']);
-    const quotes = parseLooseMetric(block, ['Quotes','引用']);
-    if (!url && !views && !likes && !comments && !shares && !quotes) return;
-    const dateMatch = block.match(/(20\d{2})[/.\-](\d{1,2})[/.\-](\d{1,2})/) ?? block.match(/(\d{1,2})\/(\d{1,2})\/(20\d{2})/);
-    const publishedAt = dateMatch ? resolveDate(dateMatch[0]) : new Date().toISOString().slice(0, 10);
-    const metricLine = /^(views?|likes?|replies?|reposts?|quotes?|瀏覽|觀看|按讚|讚|回覆|留言|轉發|引用)\b/i;
-    const title = block.split('\n').map((x) => x.trim()).find((line) => line && !line.startsWith('http') && !metricLine.test(line) && !/^\d+[,.\d萬kK]*$/.test(line)) ?? `Threads 內容 ${index + 1}`;
-    const native = url.match(/\/post\/([^/?#]+)/i)?.[1] ?? `paste-${index}-${Math.abs(hashText(block))}`;
-    contents.push({ id:`threads-${native}`, nativeContentId:native, platform:'Threads', type:'Threads Post', title:title.slice(0,180), caption:block, publishedAt, views, reach:0, impressions:views, engagement:likes+comments+shares+quotes, likes, comments, shares:shares+quotes, saves:0, clicks:0, messages:0, conversationCount:0, campaignId:'unassigned', campaignName:'尚未歸類', confidence:'low', reviewStatus:'suggested', url, permalink:url||null, hashtags:hashtags(block), classificationReasons:[], metricAvailability:{views:true,reach:false,impressions:false,engagement:true}, sourceMetricNotes:['從 Threads Insights 網頁備援資料解析（Chrome 擷取器或文字備援）；Threads 未提供的 Reach 保留 0，不會拿 Views 冒充 Reach'] });
+function cleanThreadsText(text: string) {
+  return text
+    .replace(/\r/g, '')
+    .replace(/\*\*/g, '')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '$1\n$2')
+    .replace(/^svg\s*$/gim, '')
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+}
+
+function escapedLabel(label: string) {
+  return label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function labeledNumber(text: string, label: string, percent = false): number | undefined {
+  const re = new RegExp(`(?:^|\\n)\\s*${escapedLabel(label)}\\s*(?:\\n|[:：]\\s*|\\s+)(?:\\*\\*)?([\\d,.]+)(?:\\*\\*)?\\s*${percent ? '%' : ''}`, 'im');
+  const match = text.match(re);
+  if (!match) return undefined;
+  return numeric(match[1]);
+}
+
+function benchmarkAfter(text: string, label: string): string | undefined {
+  const re = new RegExp(`(?:^|\\n)\\s*${escapedLabel(label)}\\s*(?:\\n|[:：]\\s*|\\s+)(?:\\*\\*)?[\\d,.]+%?(?:\\*\\*)?\\s*(較低|一般|高於)`, 'im');
+  return text.match(re)?.[1];
+}
+
+function sectionPercent(text: string, sectionLabel: string, itemLabel: string): number | undefined {
+  const start = text.indexOf(sectionLabel);
+  if (start < 0) return undefined;
+  const section = text.slice(start, start + 1800);
+  return labeledNumber(section, itemLabel, true);
+}
+
+function threadsPostUrl(text: string) {
+  return text.match(/https?:\/\/(?:www\.)?threads\.com\/@[^/\s]+\/post\/[^\s?#)]+/i)?.[0]?.replace(/[),，。]+$/, '') ?? '';
+}
+
+function threadsCaptionFromText(text: string) {
+  const beforeSummary = text.split(/(?:^|\n)\s*摘要\s*(?:\n|$)/i)[0] ?? text;
+  const lines = beforeSummary.split('\n').map((line) => line.trim()).filter(Boolean).filter((line) => {
+    if (/^https?:\/\//i.test(line)) return false;
+    if (/^@?[\w.]+$/.test(line)) return false;
+    if (/^\d+\s*(秒|分鐘|小時|天|週|個月|年)$/.test(line)) return false;
+    if (/^(svg|摘要)$/i.test(line)) return false;
+    return true;
   });
-  const warnings = contents.length ? [`已從 Threads Insights 備援資料辨識 ${contents.length} 則內容；請在預覽確認數字。`, '正式模式優先使用 Threads User OAuth + Insights API；尚未完成 OAuth 時可使用 Chrome 擷取器讀取已登入頁面，不需要手動選取文字。'] : ['沒有從貼上的文字辨識出 Threads 內容。建議每篇至少包含貼文網址與 Views / Likes / Replies / Reposts 等數字。'];
+  return [...lines].sort((a, b) => b.length - a.length)[0] ?? '';
+}
+
+export interface ThreadsCapturePost {
+  href?: string;
+  context?: string;
+  nativeContentId?: string;
+  accountHandle?: string;
+  publishedAt?: string;
+  publishedAtRaw?: string;
+  caption?: string;
+  tagNames?: string[];
+  metrics?: {
+    views?: number;
+    profileViews?: number;
+    viewers?: number;
+    follows?: number;
+    likes?: number;
+    replies?: number;
+    shares?: number;
+    quotes?: number;
+    reposts?: number;
+    rates?: ThreadsPostInsights['rates'];
+    trafficSources?: ThreadsPostInsights['trafficSources'];
+    benchmarks?: ThreadsPostInsights['benchmarks'];
+  };
+}
+
+export interface ThreadsCapturePayload {
+  captureType?: string;
+  schemaVersion?: number;
+  captureMode?: 'overview' | 'single-post-detail' | 'mixed';
+  pageText?: string;
+  posts?: ThreadsCapturePost[];
+  capturedAt?: string;
+  sourceUrl?: string;
+  title?: string;
+}
+
+function buildThreadsContent(post: ThreadsCapturePost, index: number, fallbackCapturedAt?: string, fallbackSourceUrl?: string): SocialContent | null {
+  const rawText = cleanThreadsText(`${post.href ?? ''}\n${post.context ?? ''}`);
+  const url = post.href || threadsPostUrl(rawText);
+  const native = post.nativeContentId || url.match(/\/post\/([^/?#]+)/i)?.[1] || `capture-${index}-${Math.abs(hashText(rawText))}`;
+  const metrics = post.metrics ?? {};
+
+  const views = metrics.views ?? labeledNumber(rawText, '瀏覽次數') ?? labeledNumber(rawText, '觀看次數') ?? parseLooseMetric(rawText, ['Views']);
+  const profileViews = metrics.profileViews ?? labeledNumber(rawText, '個人檔案瀏覽次數');
+  const viewers = metrics.viewers ?? labeledNumber(rawText, '瀏覽人數');
+  const follows = metrics.follows ?? labeledNumber(rawText, '追蹤次數');
+  const likes = metrics.likes ?? labeledNumber(rawText, '按讚數') ?? parseLooseMetric(rawText, ['Likes']);
+  const comments = metrics.replies ?? labeledNumber(rawText, '回覆數') ?? parseLooseMetric(rawText, ['Replies']);
+  const directShares = metrics.shares ?? labeledNumber(rawText, '分享數') ?? parseLooseMetric(rawText, ['Shares']);
+  const quotes = metrics.quotes ?? labeledNumber(rawText, '引用數') ?? parseLooseMetric(rawText, ['Quotes']);
+  const reposts = metrics.reposts ?? labeledNumber(rawText, '轉發數') ?? parseLooseMetric(rawText, ['Reposts']);
+
+  const rates: NonNullable<ThreadsPostInsights['rates']> = {
+    like: metrics.rates?.like ?? labeledNumber(rawText, '按讚率', true),
+    reply: metrics.rates?.reply ?? labeledNumber(rawText, '回覆率', true),
+    share: metrics.rates?.share ?? labeledNumber(rawText, '分享率', true),
+    quote: metrics.rates?.quote ?? labeledNumber(rawText, '引用率', true),
+    repost: metrics.rates?.repost ?? labeledNumber(rawText, '轉發率', true),
+  };
+  const trafficSources: NonNullable<ThreadsPostInsights['trafficSources']> = {
+    home: metrics.trafficSources?.home ?? sectionPercent(rawText, '瀏覽次數主要來源', '首頁'),
+    search: metrics.trafficSources?.search ?? sectionPercent(rawText, '瀏覽次數主要來源', '搜尋'),
+    profile: metrics.trafficSources?.profile ?? sectionPercent(rawText, '瀏覽次數主要來源', '個人檔案'),
+    activityTab: metrics.trafficSources?.activityTab ?? sectionPercent(rawText, '瀏覽次數主要來源', '活動頁籤'),
+  };
+  const benchmarks: NonNullable<ThreadsPostInsights['benchmarks']> = {
+    views: metrics.benchmarks?.views ?? benchmarkAfter(rawText, '瀏覽次數'),
+    profileViews: metrics.benchmarks?.profileViews ?? benchmarkAfter(rawText, '個人檔案瀏覽次數'),
+    viewers: metrics.benchmarks?.viewers ?? benchmarkAfter(rawText, '瀏覽人數'),
+    follows: metrics.benchmarks?.follows ?? benchmarkAfter(rawText, '追蹤次數'),
+    likeRate: metrics.benchmarks?.likeRate ?? benchmarkAfter(rawText, '按讚率'),
+    replyRate: metrics.benchmarks?.replyRate ?? benchmarkAfter(rawText, '回覆率'),
+    shareRate: metrics.benchmarks?.shareRate ?? benchmarkAfter(rawText, '分享率'),
+    quoteRate: metrics.benchmarks?.quoteRate ?? benchmarkAfter(rawText, '引用率'),
+    repostRate: metrics.benchmarks?.repostRate ?? benchmarkAfter(rawText, '轉發率'),
+  };
+
+  const caption = (post.caption || threadsCaptionFromText(rawText)).trim();
+  if (!url && !caption && views === undefined && viewers === undefined) return null;
+  const tagNames = [...new Set([...(post.tagNames ?? []), ...hashtags(rawText).map((x) => x.replace(/^#/, ''))].filter(Boolean))];
+  const title = (tagNames[0] || firstLine(caption) || `Threads 內容 ${index + 1}`).slice(0, 180);
+  const explicitDate = post.publishedAt || post.publishedAtRaw || rawText.match(/20\d{2}[/.-]\d{1,2}[/.-]\d{1,2}/)?.[0];
+  const publishedAt = resolveDate(explicitDate) || resolveDate(fallbackCapturedAt) || new Date().toISOString().slice(0, 10);
+  const hasCountEngagement = [likes, comments, directShares, quotes, reposts].some((value) => Number(value || 0) > 0);
+  const engagement = Number(likes || 0) + Number(comments || 0) + Number(directShares || 0) + Number(quotes || 0) + Number(reposts || 0);
+  const accountHandle = post.accountHandle || url.match(/threads\.com\/@([^/]+)/i)?.[1];
+
+  return {
+    id: `threads-${native}`,
+    nativeContentId: native,
+    platform: 'Threads', type: 'Threads Post', title, caption: caption || rawText,
+    publishedAt, publishedAtRaw: post.publishedAtRaw || post.publishedAt || publishedAt,
+    views: Number(views || 0), reach: 0, impressions: 0, engagement,
+    likes: Number(likes || 0), comments: Number(comments || 0), shares: Number(directShares || 0) + Number(quotes || 0) + Number(reposts || 0),
+    saves: 0, clicks: 0, messages: 0, conversationCount: 0,
+    campaignId: 'unassigned', campaignName: '尚未歸類', confidence: 'low', reviewStatus: 'suggested',
+    url, permalink: url || null, hashtags: [...new Set([...hashtags(caption), ...tagNames.map((x) => `#${x}`)])], classificationReasons: [],
+    metricAvailability: { views: views !== undefined, reach: false, impressions: false, engagement: hasCountEngagement },
+    sourceMetricNotes: [
+      'Threads 單篇洞察：瀏覽次數使用 Threads 顯示值。',
+      viewers !== undefined ? '「瀏覽人數」獨立保存在 Threads 洞察欄位，不冒充 Meta Reach。' : '此頁未取得 Threads 瀏覽人數。',
+      hasCountEngagement ? '互動使用頁面提供的按讚／回覆／分享／引用／轉發計數。' : '頁面目前只提供互動率，未用百分比反推互動人數。',
+    ],
+    threadsInsights: {
+      viewers, profileViews, follows, rates, trafficSources, benchmarks,
+      capturedAt: fallbackCapturedAt, sourceUrl: fallbackSourceUrl, accountHandle, tagNames,
+    },
+  };
+}
+
+/** Parses the structured payload sent by the Chrome Threads Insights capture extension. */
+export function parseThreadsCapturePayload(payload: ThreadsCapturePayload): { contents: SocialContent[]; warnings: string[] } {
+  const contents = (payload.posts ?? []).map((post, index) => buildThreadsContent(post, index, payload.capturedAt, payload.sourceUrl)).filter((x): x is SocialContent => Boolean(x));
+  if (!contents.length && payload.pageText) return parseThreadsInsightsText(payload.pageText);
+  const detailed = contents.filter((item) => item.threadsInsights && (item.threadsInsights.viewers !== undefined || Object.values(item.threadsInsights.rates ?? {}).some((v) => v !== undefined))).length;
+  return {
+    contents,
+    warnings: contents.length
+      ? [`已接收 ${contents.length} 則 Threads 內容，其中 ${detailed} 則含單篇詳細洞察。`, 'Threads「瀏覽人數」與 FB/IG Reach 定義不同，系統分開保存；互動率也不會被反推成互動人數。']
+      : ['沒有辨識到 Threads 貼文洞察。請在 Threads 的單篇洞察頁按擷取。'],
+  };
+}
+
+/** Text fallback for pasted / saved Threads Insights page text. */
+export function parseThreadsInsightsText(text: string): { contents: SocialContent[]; warnings: string[] } {
+  const normalized = cleanThreadsText(text);
+  if (!normalized) return { contents: [], warnings: ['尚未貼上 Threads 洞察內容。'] };
+
+  // A single-post detail page contains one post permalink plus sections such as 摘要 / 瀏覽次數主要來源.
+  const postUrls = [...normalized.matchAll(/https?:\/\/(?:www\.)?threads\.com\/@[^/\s]+\/post\/[^\s?#)]+/gi)];
+  let blocks: string[] = [];
+  if (postUrls.length > 1) {
+    blocks = postUrls.map((match, i) => normalized.slice(match.index ?? 0, postUrls[i + 1]?.index ?? normalized.length).trim());
+  } else {
+    blocks = [normalized];
+  }
+
+  const contents = blocks.map((block, index) => buildThreadsContent({ href: threadsPostUrl(block), context: block }, index)).filter((x): x is SocialContent => Boolean(x));
+  const warnings = contents.length
+    ? [`已從 Threads 洞察文字辨識 ${contents.length} 則內容；單篇頁的瀏覽人數、追蹤、互動率與流量來源會另行保存。`, '互動率只保存百分比，不會拿百分比推算按讚／回覆實際人數。']
+    : ['沒有從文字辨識出 Threads 內容。建議改用 Chrome 擷取器直接讀單篇洞察頁。'];
   return { contents, warnings };
 }
 

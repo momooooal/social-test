@@ -1,0 +1,28 @@
+kind = "data-app"
+previewPath = "/"
+title = "社群效益分析 Dashboard"
+description = "彙整 Facebook、Instagram 與 Threads 的社群成效，支援逐篇內容分析、活動歸類、詢問主題、資料匯入與年度成果報告。"
+version = "1.0.0"
+id = "artifacts/social-impact-dashboard"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23718
+
+[services.development]
+run = "pnpm --filter @workspace/social-impact-dashboard run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/social-impact-dashboard", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/social-impact-dashboard/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23718"
+BASE_PATH = "/"

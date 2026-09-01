@@ -1,0 +1,18 @@
+{
+  "name": "社群效益分析 Dashboard",
+  "short_name": "社群效益分析",
+  "description": "Facebook、Instagram 與 Threads 社群成果分析工具",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f7f5ef",
+  "theme_color": "#21434a",
+  "lang": "zh-Hant",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,679 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: social
+    description: Social impact dashboard data
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /social/status:
+    get:
+      operationId: getSocialStatus
+      tags: [social]
+      summary: Get social data source status
+      responses:
+        "200":
+          description: Current data source status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SocialStatus"
+  /social/data:
+    get:
+      operationId: getSocialData
+      tags: [social]
+      summary: Get the normalized social analytics dataset
+      responses:
+        "200":
+          description: Normalized social analytics data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SocialData"
+  /social/sync:
+    post:
+      operationId: syncSocialData
+      tags: [social]
+      summary: Request a social data sync
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncInput"
+      responses:
+        "200":
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncResult"
+  /social/accounts:
+    get:
+      operationId: getSocialAccounts
+      tags: [social]
+      summary: Get connected social accounts
+      responses:
+        "200":
+          description: Social account connection status
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SocialAccount"
+  /social/campaigns:
+    post:
+      operationId: createSocialCampaign
+      tags: [social]
+      summary: Create a campaign
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CampaignInput"
+      responses:
+        "201":
+          description: Created campaign
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Campaign"
+  /social/campaigns/{id}:
+    patch:
+      operationId: updateSocialCampaign
+      tags: [social]
+      summary: Update or archive a campaign
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CampaignUpdate"
+      responses:
+        "200":
+          description: Updated campaign
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Campaign"
+        "404":
+          description: Campaign not found
+  /social/contents/{id}/review:
+    patch:
+      operationId: reviewSocialContent
+      tags: [social]
+      summary: Accept, reassign, or exclude a content item
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContentReviewInput"
+      responses:
+        "200":
+          description: Reviewed content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SocialContent"
+        "404":
+          description: Content not found
+  /social/interactions/{id}/review:
+    patch:
+      operationId: reviewSocialInteraction
+      tags: [social]
+      summary: Reclassify or exclude a public interaction
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InteractionReviewInput"
+      responses:
+        "200":
+          description: Reviewed interaction
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Interaction"
+        "404":
+          description: Interaction not found
+  /social/snapshots/{contentId}:
+    get:
+      operationId: getSocialContentSnapshots
+      tags: [social]
+      summary: Get historical snapshots for a content item
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Content metric history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ContentSnapshot"
+  /social/import:
+    post:
+      operationId: importSocialData
+      tags: [social]
+      summary: Normalize and merge an imported dataset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportSocialInput"
+      responses:
+        "200":
+          description: Import merge result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportResult"
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    SocialSourceStatus:
+      type: object
+      properties:
+        source:
+          type: string
+        label:
+          type: string
+        status:
+          type: string
+          enum: [healthy, warning, unavailable]
+        lastSynced:
+          type: string
+        detail:
+          type: string
+      required: [source, label, status, lastSynced, detail]
+    SocialStatus:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [manual, automatic, hybrid]
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/SocialSourceStatus"
+      required: [mode, sources]
+    MonthlyMetric:
+      type: object
+      properties:
+        month:
+          type: string
+        views:
+          type: number
+        reach:
+          type: number
+        engagement:
+          type: number
+        messages:
+          type: number
+        followers:
+          type: number
+      required: [month, views, reach, engagement, messages, followers]
+    SocialContent:
+      type: object
+      properties:
+        id:
+          type: string
+        platform:
+          type: string
+          enum: [Facebook, Instagram, Threads]
+        type:
+          type: string
+          enum: [Post, Reel, Story, "Threads Post"]
+        title:
+          type: string
+        publishedAt:
+          type: string
+        views:
+          type: number
+        reach:
+          type: number
+        engagement:
+          type: number
+        likes:
+          type: number
+        comments:
+          type: number
+        shares:
+          type: number
+        saves:
+          type: number
+        clicks:
+          type: number
+        messages:
+          type: number
+        campaignId:
+          type: string
+        campaignName:
+          type: string
+        confidence:
+          type: string
+          enum: [high, medium, low]
+        reviewStatus:
+          type: string
+          enum: [suggested, accepted, reassigned, excluded]
+        url:
+          type: string
+        nativeContentId:
+          type: ["string", "null"]
+        caption:
+          type: ["string", "null"]
+        hashtags:
+          type: array
+          items:
+            type: string
+        permalink:
+          type: ["string", "null"]
+        impressions:
+          type: number
+        conversationCount:
+          type: number
+        suggestedCampaignId:
+          type: ["string", "null"]
+        classificationScore:
+          type: number
+        classificationReasons:
+          type: array
+          items:
+            type: string
+        manualCampaignId:
+          type: ["string", "null"]
+        reviewedAt:
+          type: ["string", "null"]
+        reviewSource:
+          type: ["string", "null"]
+      required: [id, platform, type, title, publishedAt, views, reach, engagement, likes, comments, shares, saves, clicks, messages, campaignId, campaignName, confidence, reviewStatus, url]
+    Campaign:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        startDate:
+          type: string
+        endDate:
+          type: string
+        contentCount:
+          type: number
+        views:
+          type: number
+        reach:
+          type: number
+        engagement:
+          type: number
+        messages:
+          type: number
+        topQuestion:
+          type: string
+        summary:
+          type: string
+        archived:
+          type: boolean
+        keywords:
+          type: array
+          items:
+            type: string
+        hashtags:
+          type: array
+          items:
+            type: string
+        aliases:
+          type: array
+          items:
+            type: string
+        landingUrls:
+          type: array
+          items:
+            type: string
+      required: [id, name, startDate, endDate, contentCount, views, reach, engagement, messages, topQuestion, summary]
+    Interaction:
+      type: object
+      properties:
+        id:
+          type: string
+        source:
+          type: string
+        text:
+          type: string
+        createdAt:
+          type: string
+        campaignId:
+          type: string
+        topic:
+          type: string
+        confidence:
+          type: string
+          enum: [high, medium, low]
+        anonymousConversationId:
+          type: ["string", "null"]
+        platform:
+          type: ["string", "null"]
+        contentId:
+          type: ["string", "null"]
+        conversationCount:
+          type: number
+        messageCount:
+          type: number
+        suggestedTopic:
+          type: ["string", "null"]
+        manualTopic:
+          type: ["string", "null"]
+        reviewStatus:
+          type: string
+          enum: [suggested, accepted, reassigned, excluded]
+        excluded:
+          type: boolean
+      required: [id, source, text, createdAt, campaignId, topic, confidence]
+    PlatformMetric:
+      type: object
+      properties:
+        platform:
+          type: string
+        followers:
+          type: number
+        growth:
+          type: number
+        views:
+          type: number
+        reach:
+          type: number
+        engagement:
+          type: number
+        posts:
+          type: number
+        reels:
+          type: number
+        stories:
+          type: number
+        messages:
+          type: number
+      required: [platform, followers, growth, views, reach, engagement, posts, reels, stories, messages]
+    SocialData:
+      type: object
+      properties:
+        generatedAt:
+          type: string
+        isDemo:
+          type: boolean
+        monthlyMetrics:
+          type: array
+          items:
+            $ref: "#/components/schemas/MonthlyMetric"
+        contents:
+          type: array
+          items:
+            $ref: "#/components/schemas/SocialContent"
+        campaigns:
+          type: array
+          items:
+            $ref: "#/components/schemas/Campaign"
+        interactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Interaction"
+        platforms:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlatformMetric"
+      required: [generatedAt, isDemo, monthlyMetrics, contents, campaigns, interactions, platforms]
+    SyncResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [synced, partial, unavailable]
+        message:
+          type: string
+        syncedAt:
+          type: string
+        imported:
+          type: number
+      required: [status, message, syncedAt, imported]
+    SyncInput:
+      type: object
+      properties:
+        source:
+          type: string
+          enum: [all, facebook, instagram, threads, messenger]
+    SocialAccount:
+      type: object
+      properties:
+        id:
+          type: string
+        platform:
+          type: string
+          enum: [facebook, instagram, threads, messenger]
+        accountName:
+          type: string
+        nativeAccountId:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [connected, unavailable, expired, needs_permission]
+        lastSynced:
+          type: ["string", "null"]
+        detail:
+          type: string
+      required: [id, platform, accountName, status, detail]
+    CampaignInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        summary:
+          type: string
+        startDate:
+          type: string
+        endDate:
+          type: string
+        keywords:
+          type: array
+          items:
+            type: string
+        hashtags:
+          type: array
+          items:
+            type: string
+        aliases:
+          type: array
+          items:
+            type: string
+        landingUrls:
+          type: array
+          items:
+            type: string
+      required: [name, summary, startDate, endDate]
+    CampaignUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        summary:
+          type: string
+        startDate:
+          type: string
+        endDate:
+          type: string
+        keywords:
+          type: array
+          items:
+            type: string
+        hashtags:
+          type: array
+          items:
+            type: string
+        aliases:
+          type: array
+          items:
+            type: string
+        landingUrls:
+          type: array
+          items:
+            type: string
+        archived:
+          type: boolean
+    ContentReviewInput:
+      type: object
+      properties:
+        reviewStatus:
+          type: string
+          enum: [accepted, reassigned, excluded]
+        manualCampaignId:
+          type: ["string", "null"]
+        reason:
+          type: string
+      required: [reviewStatus]
+    InteractionReviewInput:
+      type: object
+      properties:
+        manualTopic:
+          type: ["string", "null"]
+        campaignId:
+          type: ["string", "null"]
+        reviewStatus:
+          type: string
+          enum: [accepted, reassigned, excluded]
+        excluded:
+          type: boolean
+      required: [reviewStatus]
+    ContentSnapshot:
+      type: object
+      properties:
+        id:
+          type: string
+        contentId:
+          type: string
+        platform:
+          type: string
+        capturedAt:
+          type: string
+        views:
+          type: number
+        reach:
+          type: number
+        impressions:
+          type: number
+        engagement:
+          type: number
+        likes:
+          type: number
+        comments:
+          type: number
+        shares:
+          type: number
+        saves:
+          type: number
+        clicks:
+          type: number
+        messages:
+          type: number
+        conversationCount:
+          type: number
+        source:
+          type: string
+      required: [id, contentId, platform, capturedAt, views, reach, impressions, engagement, likes, comments, shares, saves, clicks, messages, conversationCount, source]
+    ImportSocialInput:
+      type: object
+      properties:
+        source:
+          type: string
+        contents:
+          type: array
+          items:
+            $ref: "#/components/schemas/SocialContent"
+        interactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Interaction"
+        campaigns:
+          type: array
+          items:
+            $ref: "#/components/schemas/Campaign"
+        monthlyMetrics:
+          type: array
+          items:
+            $ref: "#/components/schemas/MonthlyMetric"
+        platforms:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlatformMetric"
+      required: [source]
+    ImportResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [merged, partial, rejected]
+        added:
+          type: number
+        updated:
+          type: number
+        duplicates:
+          type: number
+        unrecognized:
+          type: number
+        message:
+          type: string
+      required: [status, added, updated, duplicates, unrecognized, message]
+

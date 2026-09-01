@@ -3,14 +3,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
-const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const srcDir = path.join(repoRoot, 'artifacts/social-impact-dashboard/src/lib');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'social-impact-core-'));
 
-for (const name of ['workspace-types.ts', 'classifier.ts', 'merge.ts', 'analytics.ts', 'importer.ts']) {
+for (const name of ['workspace-types.ts', 'classifier.ts', 'campaign-discovery.ts', 'merge.ts', 'analytics.ts', 'importer.ts']) {
   const source = fs.readFileSync(path.join(srcDir, name), 'utf8');
   const output = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true },

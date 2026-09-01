@@ -38,3 +38,14 @@ export async function requestBackendSync() {
 export async function fetchBackendStatus() {
   return backendFetch<{ mode: 'manual' | 'hybrid' | 'automatic'; sources: Array<{ source: string; label: string; status: 'healthy' | 'warning' | 'unavailable'; lastSynced: string; detail: string }> }>('/api/social/status');
 }
+
+export interface OAuthPublicConfig {
+  backendPublicUrl: string;
+  callbacks: { facebook: string; instagram: string; threads: string };
+  scopes: { facebook: string[]; instagram: string[]; threads: string[] };
+  configured: { metaApp: boolean; threadsApp: boolean; backendPublicUrl: boolean; dashboardPublicUrl: boolean };
+}
+
+export async function fetchOAuthPublicConfig() {
+  return backendFetch<OAuthPublicConfig>('/api/social/oauth/config');
+}

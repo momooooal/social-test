@@ -308,6 +308,17 @@ function DataCenter() {
   const resetPreview = () => { setFileName(''); setPreviewRows([]); setIncoming(null); setWarnings([]); setResult(''); setKind('contents'); setCampaignHints([]); };
 
   type ThreadsCapture = { captureType?: string; pageText?: string; posts?: Array<{href?:string;context?:string}>; capturedAt?:string; sourceUrl?:string };
+  const isThreadsCapture = (value: unknown): value is ThreadsCapture => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    return (value as ThreadsCapture).captureType === 'threads-insights-capture';
+  };
+  const isWorkspaceBackup = (value: unknown): value is Partial<WorkspaceData> => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    if (isThreadsCapture(value)) return false;
+    const candidate = value as Record<string, unknown>;
+    return ['contents', 'campaigns', 'interactions', 'platforms', 'monthlyMetrics', 'isDemo']
+      .some((key) => key in candidate);
+  };
   const previewThreadsCapture = (capture: ThreadsCapture, sourceLabel = 'Threads Chrome 擷取器') => {
     const joinedPosts = (capture.posts ?? []).map((post) => `${post.href ?? ''}\n${post.context ?? ''}`).join('\n\n');
     const parsed = parseThreadsInsightsText(joinedPosts || capture.pageText || '');
@@ -346,21 +357,23 @@ function DataCenter() {
     if (lower.endsWith('.json')) {
       setSource('manual-json');
       try {
-        const value = JSON.parse(await file.text()) as Partial<WorkspaceData> | SocialContent[] | { captureType?: string; pageText?: string; posts?: Array<{href?:string;context?:string}>; capturedAt?:string; sourceUrl?:string };
-        const capture = !Array.isArray(value) ? value as { captureType?: string; pageText?: string; posts?: Array<{href?:string;context?:string}>; capturedAt?:string; sourceUrl?:string } : null;
-        if (capture?.captureType === 'threads-insights-capture') {
-          previewThreadsCapture(capture, 'Threads Chrome 擷取 JSON');
+        const value: unknown = JSON.parse(await file.text());
+        if (isThreadsCapture(value)) {
+          previewThreadsCapture(value, 'Threads Chrome 擷取 JSON');
           return;
         }
         if (Array.isArray(value)) {
+          const contentRows = value as SocialContent[];
           setKind('contents');
-          setIncoming({ contents: value, isDemo: false });
-          setPreviewRows([['平台','標題','發布日','觀看','觸及'], ...value.slice(0, 4).map((row) => [String(row.platform), row.title, row.publishedAt, String(row.views), String(row.reach)])]);
-        } else {
+          setIncoming({ contents: contentRows, isDemo: false });
+          setPreviewRows([['平台','標題','發布日','觀看','觸及'], ...contentRows.slice(0, 4).map((row) => [String(row.platform), row.title, row.publishedAt, String(row.views), String(row.reach)])]);
+        } else if (isWorkspaceBackup(value)) {
           setKind('backup');
           setIncoming({ ...value, isDemo: false });
           const rows = value.contents ?? [];
           setPreviewRows([['資料類型','筆數'],['宣傳內容', String(rows.length)],['活動', String(value.campaigns?.length ?? 0)],['民眾詢問', String(value.interactions?.length ?? 0)],['平台彙總', String(value.platforms?.length ?? 0)]]);
+        } else {
+          setWarnings(['JSON 格式可以讀取，但不是 Workspace 備份、宣傳內容陣列或 Threads 洞察擷取資料。']);
         }
       } catch {
         setWarnings(['JSON 格式無法解析，請確認檔案是否完整。']);

@@ -1,0 +1,1560 @@
+請不要再拆成 Suggested next tasks，也不要做到一半再問我要先做哪一項。
+
+請直接以「目前這個既有專案」為基礎，把剩餘功能一次完成到可正式測試、可部署、可交付的狀態。
+
+重要：
+不要重新做一個新專案。
+不要推翻現在已經做好的視覺。
+不要只做 mock / demo。
+不要只寫 TODO。
+不要因為 Meta API 尚未提供 credentials 就停止開發。
+
+請先閱讀目前整個 repository，再直接修改現有檔案。
+
+目前我已確認這個專案已有：
+
+artifacts/social-impact-dashboard
+artifacts/api-server
+lib/api-spec
+lib/api-zod
+lib/api-client-react
+lib/db
+
+目前前端的 Dashboard、活動、宣傳內容、公眾詢問、平台分析、報告、資料中心、設定等頁面已經有基本 UI。
+
+請保留這些成果，繼續完成以下所有項目。
+
+==================================================
+A. 先修正目前專案實際存在的資料架構問題
+==================================================
+
+我檢查目前程式後，以下不是未來功能，而是現在就需要修掉的問題：
+
+1. `lib/db/src/schema/index.ts`
+目前幾乎是空的。
+
+請正式建立資料 schema，至少包含：
+
+accounts
+campaigns
+contents
+content_snapshots
+manual_reviews
+interactions
+interaction_reviews
+monthly_metrics
+platform_metrics
+sync_runs
+sync_sources
+
+如果後端有 PostgreSQL / DATABASE_URL 就使用 Drizzle。
+
+但：
+
+前端 GitHub Pages 不得依賴 DB 才能打開。
+
+--------------------------------------------------
+
+2. Campaign 新增目前有部分只存在 React state。
+
+目前 `Campaigns()` 裡有：
+
+created state
+
+這代表重新整理頁面可能消失。
+
+請改成真正寫入統一資料層。
+
+GitHub Pages / 無 backend 模式：
+→ IndexedDB
+
+有 backend：
+→ backend persistence
+→ 同時同步本機 cache
+
+建立、編輯、封存活動都必須持久保存。
+
+--------------------------------------------------
+
+3. 民眾詢問重新分類目前也不能只放 component state。
+
+人工修改：
+
+問題主題
+活動歸類
+排除狀態
+
+全部必須寫入 manual review 資料。
+
+重新整理頁面後不可消失。
+
+--------------------------------------------------
+
+4. 宣傳內容人工覆核是最高優先級資料。
+
+以下欄位：
+
+manual_campaign_id
+review_status
+reviewed_at
+review_source
+
+任何：
+
+自動同步
+CSV 匯入
+XLSX 匯入
+JSON 匯入
+
+都「絕對不可以覆蓋人工覆核」。
+
+合併資料時遵守：
+
+平台同步數字可以更新
+貼文文案可以更新
+metrics 可以更新
+
+但是：
+
+人工活動歸屬
+人工接受
+人工改派
+人工排除
+
+必須優先。
+
+優先順序：
+
+manual review
+>
+最新同步資料
+>
+舊同步資料
+>
+自動分類建議
+
+--------------------------------------------------
+
+5. 現有 Import merge 不可以只用：
+
+content.id
+
+去重。
+
+建立 stable content key：
+
+優先：
+
+platform + native_content_id
+
+若 native_content_id 缺失：
+
+platform + normalized permalink
+
+若 permalink 也沒有：
+
+platform + published_at + normalized caption hash
+
+同一篇內容重新匯入：
+
+更新同一筆
+
+不要新增重複貼文。
+
+==================================================
+B. 正式加入每日 Snapshot
+==================================================
+
+這是核心功能，請完整實作。
+
+建立：
+
+content_snapshots
+
+至少：
+
+id
+content_id
+platform
+captured_at
+
+views
+reach
+impressions
+
+engagement
+likes
+comments
+shares
+saves
+clicks
+
+messages
+conversation_count
+
+source
+
+每次：
+
+API 同步
+手動匯入
+
+如果數據和上一份不同，就建立 snapshot。
+
+不要每天把 content 本體複製一份。
+
+content：
+保存現在最新值
+
+content_snapshots：
+保存歷史值
+
+--------------------------------------------------
+
+每篇內容詳情頁新增：
+
+目前數字
+
+較上次：
+
++8,420
+
+24 小時：
+
++23.5%
+
+7 天：
+
++71.2%
+
+並顯示成長趨勢圖。
+
+至少支援：
+
+觀看
+觸及
+互動
+分享
+收藏
+
+--------------------------------------------------
+
+Dashboard 首頁新增：
+
+「最近快速成長內容」
+
+例如：
+
+IG Reel
+創意造筏競賽
+
+目前 58,421
+24h +18,215
+↑ 45.3%
+
+==================================================
+C. 活動 KPI 必須改成真正動態計算
+==================================================
+
+目前 Campaign object 裡：
+
+views
+reach
+engagement
+messages
+contentCount
+
+不能再被當成固定真相。
+
+活動頁數字必須由：
+
+contents
++
+manual_reviews
++
+interactions
+
+即時計算。
+
+人工把某篇：
+
+A 活動
+→
+改派 B 活動
+
+A 的 KPI 要立刻下降。
+
+B 的 KPI 要立刻上升。
+
+--------------------------------------------------
+
+目前 CampaignDetail 的平台貢獻不能再用：
+
+整體平台 reach × campaign reach / 某個 hard-coded total
+
+這種估算。
+
+必須根據：
+
+該活動實際 Facebook 內容
+該活動實際 Instagram 內容
+該活動實際 Threads 內容
+
+分別加總。
+
+--------------------------------------------------
+
+活動頁至少動態顯示：
+
+內容數
+
+Facebook 數
+Instagram 數
+Threads 數
+
+Post 數
+Reels 數
+Story 數
+
+views
+reach
+impressions
+
+engagement
+engagement rate
+
+likes
+comments
+shares
+saves
+clicks
+
+conversation_count
+message_count
+
+follower growth（若資料可取得）
+
+==================================================
+D. 自動活動分類器做完整
+==================================================
+
+不要使用付費 AI API 才能運作。
+
+建立：
+
+classifier.ts
+
+計分方式例如：
+
+活動名稱完全命中 +5
+Hashtag 命中 +3
+關鍵字命中 +2
+發布日期落在宣傳期間 +2
+活動網址命中 +4
+活動別名命中 +3
+
+最後產生：
+
+suggested_campaign_id
+classification_score
+confidence
+
+confidence：
+
+high
+medium
+low
+
+--------------------------------------------------
+
+建立活動時增加：
+
+活動日期
+宣傳起日
+宣傳迄日
+
+keywords
+hashtags
+aliases
+landing_urls
+
+--------------------------------------------------
+
+自動分類只提供「建議」。
+
+不可直接變人工確認。
+
+狀態：
+
+suggested
+accepted
+reassigned
+excluded
+
+==================================================
+E. 宣傳內容頁補成真正的工作台
+==================================================
+
+目前 Content Library 已經有基礎。
+
+請繼續完善：
+
+搜尋：
+
+標題
+caption
+活動名稱
+content ID
+hashtag
+網址
+
+篩選：
+
+平台
+內容類型
+活動
+日期
+confidence
+review status
+
+內容類型：
+
+Post
+Reel
+Story
+Video
+Live
+Threads Post
+
+--------------------------------------------------
+
+每篇詳細頁增加：
+
+原始貼文連結
+
+最新成效
+
+歷史成長圖
+
+平台
+內容類型
+發布時間
+
+活動自動建議
+
+分類理由，例如：
+
+活動名稱命中
+2 個關鍵字命中
+發布日在宣傳期間
+
+confidence
+
+人工活動歸屬
+
+接受
+改派
+排除
+
+--------------------------------------------------
+
+「排除」
+
+只是：
+
+exclude from campaign KPI
+
+不可 delete 原始資料。
+
+==================================================
+F. 手動匯入雙軌模式完整化
+==================================================
+
+目前 DataCenter 雖然有 CSV / XLSX / JSON，
+但是實際上主要只處理 contents。
+
+請完整支援：
+
+1. Content
+2. Account / Platform metrics
+3. Monthly metrics
+4. Interactions / inquiries
+5. Stories
+6. Messenger / DM aggregate
+7. Backup JSON
+
+--------------------------------------------------
+
+匯入後先顯示：
+
+資料來源判斷
+平台判斷
+資料類型判斷
+
+新增幾筆
+更新幾筆
+可能重複幾筆
+無法辨識幾筆
+
+使用者確認後才 Merge。
+
+--------------------------------------------------
+
+建立真正的 fuzzy column mapper。
+
+例如以下都能辨識：
+
+Views
+Views count
+Video views
+觀看次數
+瀏覽
+播放次數
+
+Reach
+觸及
+觸及人數
+
+Interactions
+Content interactions
+Engagement
+互動
+
+以及 Meta 改不同版本欄位名稱時，
+仍盡量對應。
+
+--------------------------------------------------
+
+不要錯把 Reach 當 Views。
+
+欄位不確定：
+
+標記：
+
+「需要確認欄位」
+
+不要亂填。
+
+==================================================
+G. 真正做 Facebook / Instagram / Threads 自動同步
+==================================================
+
+目前：
+
+artifacts/api-server/src/routes/social.ts
+
+仍然只是 normalized demo dataset。
+
+請把 Demo backend 保留作：
+
+DEMO_MODE=true
+
+但是正式增加：
+
+Meta provider architecture。
+
+例如：
+
+src/providers/
+facebook.ts
+instagram.ts
+threads.ts
+meta-auth.ts
+normalizer.ts
+
+--------------------------------------------------
+
+使用 Meta 官方 API。
+
+開發時請查目前最新官方 Meta 文件，
+不要只依模型記憶猜 endpoint 或 permission 名稱。
+
+不要爬：
+
+Meta Business Suite HTML
+
+不要：
+
+Chrome automation
+
+不要：
+
+selenium scraping
+
+--------------------------------------------------
+
+Secrets 一律只放 Backend：
+
+META_APP_ID
+META_APP_SECRET
+
+以及實際 OAuth 所需 Secret。
+
+禁止出現在：
+
+frontend
+dist
+GitHub public files
+
+--------------------------------------------------
+
+建立 OAuth：
+
+GET /api/auth/facebook/start
+GET /api/auth/facebook/callback
+
+GET /api/auth/instagram/start
+GET /api/auth/instagram/callback
+
+GET /api/auth/threads/start
+GET /api/auth/threads/callback
+
+GET /api/social/accounts
+
+--------------------------------------------------
+
+設定頁應該可以看到：
+
+Facebook
+[ 尚未連結 ]
+[ 連結帳號 ]
+
+Instagram
+[ 尚未連結 ]
+[ 連結帳號 ]
+
+Threads
+[ 尚未連結 ]
+[ 連結帳號 ]
+
+授權後：
+
+Facebook
+高雄市政府運動發展局
+✓ 已連結
+最後同步 09:31
+
+Instagram
+@xxxxx
+✓ 已連結
+
+Threads
+@xxxxx
+✓ 已連結
+
+--------------------------------------------------
+
+若 OAuth 在 GitHub Pages frontend：
+
+Redirect 回 frontend 時仍需透過 backend。
+
+Token 不可以進 URL query string 長期保存。
+
+--------------------------------------------------
+
+Meta API 某個功能權限失敗：
+
+不要讓整個同步失敗。
+
+例如：
+
+Facebook Content OK
+Instagram Content OK
+Threads OK
+Messenger permission denied
+
+結果：
+
+3 個來源成功
+1 個來源權限不足
+
+SyncResult：
+
+partial
+
+UI 顯示：
+
+Messenger
+⚠ 權限不足
+可使用手動匯入
+
+==================================================
+H. 自動同步排程
+==================================================
+
+加入 server-side scheduled sync 架構。
+
+至少支援：
+
+手動「立即同步」
+
+以及：
+
+daily scheduled sync
+
+如果 Replit deployment 本身無法免費永久 cron：
+
+不要假裝已有 cron。
+
+請提供：
+
+1. Replit scheduled job 可以使用的 endpoint / command
+
+2. GitHub Actions scheduled workflow 可選方案
+
+例如每天執行一次 backend protected sync endpoint。
+
+但是：
+
+secret 必須存在 GitHub Secrets，
+不能寫在 repo。
+
+--------------------------------------------------
+
+frontend 不可為了「每 5 分鐘刷新畫面」
+就誤稱：
+
+「每 5 分鐘已從 Meta 同步」。
+
+UI 必須區分：
+
+重新讀取 Dashboard 資料
+
+vs
+
+要求 Backend 重新向 Meta 抓資料
+
+==================================================
+I. 雙軌 Merge Engine
+==================================================
+
+這是整套系統最重要的核心之一。
+
+請建立單一 merge pipeline：
+
+API
+CSV
+XLSX
+JSON
+Backup Restore
+
+全部先 normalize 成同一 schema：
+
+NormalizedSocialContent
+
+再進：
+
+mergeSocialContent()
+
+--------------------------------------------------
+
+規則：
+
+remote metrics：
+可更新
+
+manual review：
+保留
+
+snapshot：
+新增
+
+raw source metadata：
+保留
+
+duplicates：
+合併
+
+--------------------------------------------------
+
+來源優先權不要簡單用：
+
+API 永遠比 CSV 高
+
+因為月底官方匯出檔有時比 API 完整。
+
+每個 metric 保留：
+
+value
+source
+updated_at
+
+或設計等價機制。
+
+至少可以知道：
+
+這個數字最後從哪個來源更新。
+
+==================================================
+J. 公眾詢問 / 私訊功能完成
+==================================================
+
+資料模型要明確區分：
+
+conversation_count
+
+與
+
+message_count
+
+例：
+
+同一個人傳 10 則訊息：
+
+conversation_count = 1
+message_count = 10
+
+--------------------------------------------------
+
+Interaction：
+
+id
+anonymous_conversation_id
+source
+platform
+content_id
+campaign_id
+
+created_at
+text
+
+topic
+suggested_topic
+manual_topic
+
+confidence
+
+review_status
+
+--------------------------------------------------
+
+分類主題：
+
+報名方式
+名額 / 候補
+資格 / 參加對象
+時間 / 日期
+地點
+交通
+停車
+費用
+付款
+退費
+活動內容
+流程
+規則
+裝備
+服裝
+材料
+天候
+延期
+取消
+獎項
+成績
+證明
+其他
+
+--------------------------------------------------
+
+分類器不用外部 AI。
+
+先 keyword classifier。
+
+保留：
+
+InteractionClassifier interface
+
+未來可以換 AI。
+
+--------------------------------------------------
+
+Inquiries 頁的人工改分類：
+
+必須永久保存。
+
+不是 component state。
+
+==================================================
+K. 隱私
+==================================================
+
+這是政府社群資料工具。
+
+請嚴格處理。
+
+公開 GitHub repository：
+
+禁止保存：
+
+民眾姓名
+Facebook user ID
+Instagram user ID
+Threads user ID
+Profile URL
+私訊帳號
+完整 raw private conversation
+
+--------------------------------------------------
+
+若本機需要分析 private message text：
+
+只留 IndexedDB / secure backend。
+
+公開 aggregate JSON 只能輸出：
+
+campaign
+topic
+count
+period
+
+--------------------------------------------------
+
+加入：
+
+「匯出公開安全資料」
+
+與：
+
+「完整私有備份」
+
+兩種不同按鈕。
+
+公開安全資料：
+
+自動移除 private raw text 與 identifiers。
+
+==================================================
+L. 改善建議不要 hard-code
+==================================================
+
+目前活動頁：
+
+Generated improvement note
+
+看起來是固定文字。
+
+請改成規則型動態產生。
+
+例如：
+
+交通 + 停車 > 25%
+
+→
+
+「交通與停車詢問比例偏高，建議下次活動將停車位置、大眾運輸方式與地圖直接放入主視覺或報名頁前段。」
+
+--------------------------------------------------
+
+候補高：
+
+→
+
+候補流程改善建議
+
+--------------------------------------------------
+
+活動時間高：
+
+→
+
+時間資訊前置
+
+--------------------------------------------------
+
+資格高：
+
+→
+
+主視覺直接寫參加對象
+
+--------------------------------------------------
+
+每個建議必須附：
+
+「判斷依據」
+
+例如：
+
+31% 的活動詢問與交通 / 停車有關。
+
+==================================================
+M. 年度報告正式化
+==================================================
+
+目前 Reports 頁保留。
+
+但是資料全部改為真實計算。
+
+年份選擇器不能只是 UI。
+
+選：
+
+2026
+
+所有：
+
+KPI
+圖表
+Top Content
+Campaign
+月趨勢
+Report
+
+都真正過濾 2026。
+
+--------------------------------------------------
+
+期間支援：
+
+年度
+季度
+月份
+自訂日期
+單一活動
+
+--------------------------------------------------
+
+自動報告至少產生：
+
+1. 社群整體成果
+2. 三平台成效
+3. 年度成長
+4. Top 活動
+5. Top 內容
+6. 民眾主要詢問
+7. 社群服務量
+8. 改善建議
+9. 下一年度建議
+
+語氣：
+
+政府成果報告
+經費佐證
+
+不要：
+
+網紅行銷報告語氣。
+
+==================================================
+N. 資料品質中心要用真數字
+==================================================
+
+目前：
+
+96.8%
+88.4%
+
+這類不要 hard-code。
+
+動態計算：
+
+欄位完整度
+重複內容數
+待覆核數
+低 confidence 數
+未歸類內容
+缺少 URL
+缺少 content ID
+來源最後同步時間
+同步失敗數
+本月份缺資料天數
+
+--------------------------------------------------
+
+來源狀態：
+
+Facebook
+
+最後同步：
+2026/09/01 09:32
+
+狀態：
+正常
+
+Instagram：
+正常
+
+Threads：
+一天未更新
+
+Messenger：
+權限不足
+
+==================================================
+O. GitHub Pages 必須真的能跑
+==================================================
+
+這一點非常重要。
+
+現在是：
+
+Vite + React
+
+可以保留。
+
+但是正式完成：
+
+GitHub Pages deployment。
+
+--------------------------------------------------
+
+加入：
+
+.github/workflows/deploy-pages.yml
+
+Push main：
+
+build
+deploy GitHub Pages
+
+--------------------------------------------------
+
+vite.config.ts：
+
+不要強制要求只有 Replit 才存在的：
+
+PORT
+BASE_PATH
+
+production build 要有安全預設值。
+
+要支援：
+
+Replit
+
+以及：
+
+GitHub Pages repo subpath。
+
+--------------------------------------------------
+
+GitHub Pages direct refresh：
+
+/campaigns
+/content
+/settings
+
+不能 404。
+
+可以：
+
+改 hash routing
+
+例如：
+
+/#/campaigns
+
+或者建立完善的 SPA fallback。
+
+以 GitHub Pages 穩定度優先。
+
+--------------------------------------------------
+
+README 寫：
+
+GitHub Pages 開啟方式。
+
+==================================================
+P. PWA 完善
+==================================================
+
+保留：
+
+manifest.json
+service-worker.js
+
+手機可以：
+
+新增到主畫面。
+
+--------------------------------------------------
+
+不要造成舊資料 cache 問題。
+
+策略：
+
+HTML：
+network first
+
+API：
+network first
+
+JSON dynamic data：
+network first
+
+JS / CSS immutable hashed assets：
+cache first / stale-while-revalidate
+
+--------------------------------------------------
+
+Service Worker version 改版時：
+
+能清除舊 cache。
+
+==================================================
+Q. 視覺不要推翻，但再舒服、可愛一點
+==================================================
+
+目前視覺方向基本上可以。
+
+請保留：
+
+奶油色
+青綠
+珊瑚
+柔和 dashboard
+
+但是再增加一點：
+
+「可愛、舒服、有溫度」
+
+而不是：
+
+企業 BI Dashboard。
+
+--------------------------------------------------
+
+可以使用少量：
+
+小鴨 / 圓形角色
+小插圖
+柔和 loading
+空狀態插畫
+微動畫
+
+但：
+
+不要整頁 cartoon
+不要幼兒園風格
+不要大量 emoji
+
+--------------------------------------------------
+
+首頁可以有一句：
+
+「今天的社群也有好好留下痕跡。」
+
+或相近語氣。
+
+--------------------------------------------------
+
+數據資訊仍然要專業。
+
+==================================================
+R. 手機版重新檢查
+==================================================
+
+目前桌面 sidebar 很完整。
+
+手機請調整成真正方便使用：
+
+Bottom Navigation：
+
+總覽
+活動
+內容
+更多
+
+更多：
+
+民眾詢問
+平台
+報告
+資料
+設定
+
+--------------------------------------------------
+
+手機：
+
+表格不要只能左右滑。
+
+重要內容列表改成 responsive cards。
+
+尤其：
+
+宣傳內容
+公眾詢問
+活動列表
+
+==================================================
+S. Onboarding
+==================================================
+
+首次真正使用時：
+
+不要直接看到 Demo 當正式資料。
+
+建立：
+
+Welcome
+
+選：
+
+① 使用 Demo 看看
+
+② 開始使用真實資料
+
+真實資料：
+
+→ 自動同步＋手動備援
+
+→ 僅手動匯入
+
+--------------------------------------------------
+
+Demo 全程明確顯示：
+
+DEMO
+
+點：
+
+開始使用真實資料
+
+才清除。
+
+==================================================
+T. 測試：這次一定要做
+==================================================
+
+加入正式 automated tests。
+
+至少測：
+
+1.
+CSV import 成功
+
+2.
+XLSX import 成功
+
+3.
+JSON import 成功
+
+4.
+同一篇貼文重複 import 不會新增
+
+5.
+同一篇更新 metrics 後：
+內容只有 1 篇
+
+6.
+更新 metrics：
+會新增 snapshot
+
+7.
+API sync：
+不會蓋掉人工 accepted
+
+8.
+API sync：
+不會蓋掉人工 reassigned
+
+9.
+API sync：
+不會蓋掉人工 excluded
+
+10.
+手動改派後重新整理：
+仍存在
+
+11.
+詢問主題人工修改後重新整理：
+仍存在
+
+12.
+Campaign KPI：
+會因改派立即重算
+
+13.
+excluded：
+不計入 campaign KPI
+
+14.
+backend unavailable：
+GitHub Pages frontend 正常使用
+
+15.
+Meta 某平台失敗：
+其他平台仍同步成功
+
+16.
+公開安全資料匯出：
+不包含 private message text / identifiers
+
+17.
+GitHub Pages build 成功
+
+18.
+Production build 無 console error
+
+--------------------------------------------------
+
+建議使用：
+
+Vitest
+
+React Testing Library
+
+如果需要 E2E：
+
+Playwright
+
+==================================================
+U. 不可以出現的假功能
+==================================================
+
+完成時請逐項確認沒有這些狀況：
+
+❌ 同步按鈕其實只 refresh demo
+
+❌ Facebook 顯示已同步但其實是假資料
+
+❌ 宣傳內容頁沒有逐篇資料
+
+❌ 活動 KPI 使用 campaign object 固定數字
+
+❌ 人工覆核重新整理就消失
+
+❌ API 同步後人工覆核消失
+
+❌ 每天同步產生相同貼文 N 份
+
+❌ 每日 snapshot 沒真的保存
+
+❌ 年份 selector 只改 UI
+
+❌ 改善建議固定同一段
+
+❌ 資料品質百分比 hard-coded
+
+❌ GitHub Pages 開首頁可以但子頁 refresh 404
+
+❌ 沒 backend 就白畫面
+
+❌ Meta token / secret 進 frontend
+
+❌ private message 原文進 public GitHub export
+
+==================================================
+V. Meta credentials 尚未提供時怎麼處理
+==================================================
+
+如果你現在沒有我的：
+
+META_APP_ID
+META_APP_SECRET
+實際粉專 / IG / Threads 授權
+
+不要停下來問我。
+
+先：
+
+1. 把所有 OAuth code 寫完
+2. 把 provider 寫完
+3. 把 normalizer 寫完
+4. 把 error handling 寫完
+5. 把 mock Meta responses 寫成 tests
+6. 在設定頁顯示「等待 Meta credentials」
+7. README 清楚列出我最後只需要填哪些 Secrets
+
+等全部開發完成後，
+
+才在最後告訴我：
+
+「要開始抓真實資料，目前只差以下 Secrets / Meta 設定。」
+
+不要因 credentials 尚未提供而中途停止。
+
+==================================================
+W. 最後請自行完成驗收，不要再丟 Suggested tasks 給我
+==================================================
+
+完成所有程式後：
+
+請自己執行：
+
+pnpm install
+pnpm run typecheck
+pnpm run build
+tests
+
+並修正所有：
+
+TypeScript errors
+build errors
+runtime errors
+console errors
+
+--------------------------------------------------
+
+再實際檢查：
+
+Desktop
+Tablet
+Mobile
+
+--------------------------------------------------
+
+測：
+
+沒有 backend
+
+也能：
+
+開首頁
+新增活動
+匯入資料
+活動分類
+人工覆核
+看報告
+匯出
+
+--------------------------------------------------
+
+再測：
+
+mock backend
+
+可以：
+
+sync
+merge
+snapshot
+partial failure
+
+==================================================
+X. 最後交付
+==================================================
+
+全部完成後才回覆我。
+
+不要中途一直問我下一步。
+
+最後請提供：
+
+1. 已完成項目
+2. 尚需我提供的 Meta credentials
+3. Replit Preview
+4. GitHub Pages 部署方式
+5. backend 部署方式
+6. Secrets 名稱
+7. 測試結果
+8. build 結果
+9. 哪些 Meta 功能可能需要 App Review / Advanced Access
+10. 完整 README 已更新
+
+並幫我打包：
+
+完整專案 ZIP
+
+以及：
+
+GitHub Pages 可直接部署的 build。
+
+最重要：
+
+這次請把它當成「要長期拿來工作的正式產品」完成，
+不要再當成 prototype 或 demo。
+
+在你完成上面所有可以自行完成的工作以前，
+請不要停止，也不要再問我要選哪一個 Suggested task。

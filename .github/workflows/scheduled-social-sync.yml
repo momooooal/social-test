@@ -1,0 +1,24 @@
+name: Scheduled social sync
+
+on:
+  schedule:
+    - cron: '30 8 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger protected backend sync
+        env:
+          SOCIAL_SYNC_URL: ${{ secrets.SOCIAL_SYNC_URL }}
+          SOCIAL_SYNC_KEY: ${{ secrets.SOCIAL_SYNC_KEY }}
+        run: |
+          if [ -z "$SOCIAL_SYNC_URL" ] || [ -z "$SOCIAL_SYNC_KEY" ]; then
+            echo "Scheduled sync is not configured; skipping."
+            exit 0
+          fi
+          curl --fail --show-error --silent \
+            -X POST \
+            -H "X-Sync-Key: $SOCIAL_SYNC_KEY" \
+            "$SOCIAL_SYNC_URL/api/social/sync/scheduled"

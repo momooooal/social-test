@@ -32,6 +32,10 @@ export function calculateCampaignMetrics(data: WorkspaceData, campaign: Campaign
   const engagement = sum('engagement');
   return {
     contentCount: contents.length,
+    viewsKnownContentCount: contents.filter((item) => metricDisplay(item, 'views').available).length,
+    viewsMissingContentCount: contents.filter((item) => !metricDisplay(item, 'views').available).length,
+    reachKnownContentCount: contents.filter((item) => metricDisplay(item, 'reach').available).length,
+    reachMissingContentCount: contents.filter((item) => !metricDisplay(item, 'reach').available).length,
     views: sum('views'), reach, impressions: sum('impressions'), engagement,
     engagementRate: reach ? engagement / reach * 100 : 0,
     likes: sum('likes'), comments: sum('comments'), shares: sum('shares'), saves: sum('saves'), clicks: sum('clicks'),
@@ -108,4 +112,107 @@ export function growthForContent(content: SocialContent, snapshots: ContentSnaps
   const previous = Number(base[metric] ?? 0);
   const absolute = current - previous;
   return { absolute, percent: previous > 0 ? absolute / previous * 100 : 0, previous };
+}
+
+function crossPostFingerprint(content: SocialContent) {
+  return (content.caption || content.title || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/@[\w.]+/g, ' ')
+    .replace(/#[^\s#，,。!！?？]+/g, ' ')
+    .replace(/[\s\p{P}\p{S}]+/gu, '')
+    .slice(0, 1200);
+}
+
+function trigrams(value: string) {
+  const set = new Set<string>();
+  if (value.length < 3) { if (value) set.add(value); return set; }
+  for (let i = 0; i <= value.length - 3; i += 1) set.add(value.slice(i, i + 3));
+  return set;
+}
+
+function textSimilarity(a: string, b: string) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const aa = trigrams(a), bb = trigrams(b);
+  if (!aa.size || !bb.size) return 0;
+  let common = 0;
+  aa.forEach((x) => { if (bb.has(x)) common += 1; });
+  return (2 * common) / (aa.size + bb.size);
+}
+
+function contentTime(content: SocialContent) {
+  const raw = content.publishedAtRaw || content.publishedAt;
+  const time = new Date(raw).getTime();
+  return Number.isFinite(time) ? time : new Date(content.publishedAt.slice(0, 10)).getTime();
+}
+
+export interface CrossPublishedGroup {
+  id: string;
+  title: string;
+  publishedAt: string;
+  platforms: string[];
+  items: SocialContent[];
+  views: number;
+  reach: number;
+  engagement: number;
+  similarity: number;
+}
+
+/**
+ * Groups mirrored / cross-published content while preserving one independent row per platform.
+ * The group is a creative-level view only: platform KPIs still count Facebook and Instagram separately.
+ * Cross-platform reach is an arithmetic total and MUST NOT be described as de-duplicated people.
+ */
+export function crossPublishedGroups(contents: SocialContent[]): CrossPublishedGroup[] {
+  const candidates = contents
+    .filter((item) => item.reviewStatus !== 'excluded' && (item.platform === 'Facebook' || item.platform === 'Instagram'))
+    .map((item) => ({ item, fp: crossPostFingerprint(item), time: contentTime(item) }))
+    .filter((row) => row.fp.length >= 24 && Number.isFinite(row.time));
+
+  const groups: CrossPublishedGroup[] = [];
+  const used = new Set<string>();
+  for (let i = 0; i < candidates.length; i += 1) {
+    const a = candidates[i];
+    if (used.has(a.item.id)) continue;
+    let best: { row: typeof a; score: number } | null = null;
+    for (let j = i + 1; j < candidates.length; j += 1) {
+      const b = candidates[j];
+      if (used.has(b.item.id) || b.item.platform === a.item.platform) continue;
+      const withinThirtyMinutes = Math.abs(a.time - b.time) <= 30 * 60 * 1000;
+      if (!withinThirtyMinutes) continue;
+      const score = textSimilarity(a.fp, b.fp);
+      if (score >= 0.78 && (!best || score > best.score)) best = { row: b, score };
+    }
+    if (!best) continue;
+    const matches = [a.item, best.row.item];
+    matches.forEach((item) => used.add(item.id));
+    groups.push({
+      id: `cross:${matches.map((item) => `${item.platform}:${item.nativeContentId || item.id}`).sort().join('|')}`,
+      title: matches[0].title,
+      publishedAt: matches.map((item) => item.publishedAt).sort()[0],
+      platforms: matches.map((item) => item.platform),
+      items: matches,
+      views: matches.reduce((sum, item) => sum + Number(item.views || 0), 0),
+      reach: matches.reduce((sum, item) => sum + Number(item.reach || 0), 0),
+      engagement: matches.reduce((sum, item) => sum + Number(item.engagement || 0), 0),
+      similarity: best.score,
+    });
+  }
+  return groups.sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
+}
+
+export function metricDisplay(content: SocialContent, metric: 'views' | 'reach' | 'impressions') {
+  const availability = content.metricAvailability?.[metric];
+  if (availability === false) return { available: false, value: null as number | null };
+  // Backward-compatible migration for FB CSV rows imported by the previous build:
+  // the user's Meta export contains no per-post Views/Reach columns, so zero was
+  // merely a placeholder, not measured performance.
+  const notes = (content.sourceMetricNotes ?? []).join(' ');
+  const oldFacebookExport = content.platform === 'Facebook' && /Facebook Meta.*匯出/.test(notes);
+  if (availability === undefined && oldFacebookExport && Number(content[metric] ?? 0) === 0 && (metric === 'views' || metric === 'reach')) {
+    return { available: false, value: null as number | null };
+  }
+  return { available: true, value: Number(content[metric] ?? 0) };
 }

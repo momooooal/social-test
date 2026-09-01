@@ -58,6 +58,7 @@ export interface SocialContent {
   type: ContentType;
   title: string;
   publishedAt: string;
+  publishedAtRaw?: string | null;
   views: number;
   reach: number;
   engagement: number;
@@ -90,6 +91,7 @@ export interface SocialContent {
   followersGained?: number;
   sourceMetricNotes?: string[];
   sourceRowCount?: number;
+  metricAvailability?: { views?: boolean; reach?: boolean; impressions?: boolean; engagement?: boolean };
 }
 
 export interface Interaction {

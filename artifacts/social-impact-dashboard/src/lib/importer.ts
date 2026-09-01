@@ -12,7 +12,7 @@ const aliases: Record<string, string[]> = {
   title: ['title','caption','text','message','內容','標題','說明','貼文內容','文案'],
   caption: ['caption','description','message','說明','內容','貼文內容','文案','標題'],
   publishedAt: ['publishedat','publishtime','createdtime','發佈時間','發布時間','發布日期','建立時間','時間'],
-  views: ['views','viewscount','videoviews','playcount','觀看次數','觀看','播放次數','瀏覽次數'],
+  views: ['views','viewscount','videoviews','playcount','觀看次數','觀看','播放次數','瀏覽次數','檢視次數','影片播放次數','影片瀏覽次數','影片觀看次數','reels播放次數','reels瀏覽次數'],
   impressions: ['impressions','impression','曝光次數','曝光'],
   reach: ['reach','accountsreached','觸及','觸及人數'],
   engagement: ['engagement','contentinteractions','interactions','互動','內容互動','心情留言和分享次數'],
@@ -101,6 +101,17 @@ function resolveDate(value: unknown) {
   return raw.replace(/[./]/g, '-').slice(0, 10);
 }
 
+function resolveDateTime(value: unknown) {
+  const raw = String(value ?? '').trim();
+  if (!raw || raw === '總期間') return '';
+  let m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);
+  if (m) return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}T${(m[4] ?? '00').padStart(2, '0')}:${m[5] ?? '00'}:00`;
+  m = raw.match(/^(\d{4})[/.\-](\d{1,2})[/.\-](\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?/);
+  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}T${(m[4] ?? '00').padStart(2, '0')}:${m[5] ?? '00'}:00`;
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+}
+
 function firstLine(value: unknown) {
   const text = String(value ?? '').trim();
   return (text.split(/\r?\n/).find(Boolean) ?? text).trim().slice(0, 180);
@@ -147,6 +158,7 @@ export function normalizeImportedContent(row: Record<string, unknown>, index: nu
     caption: caption || title,
     hashtags: hashtags(caption),
     publishedAt,
+    publishedAtRaw: resolveDateTime(publishedRaw) || publishedAt,
     views: numeric(viewsField),
     impressions: numeric(impressionField),
     reach: numeric(reachField),
@@ -195,33 +207,54 @@ function normalizeFacebookMetaExport(rows: Record<string, unknown>[]): MetaConte
     groups.set(id, [...(groups.get(id) ?? []), row]);
   });
   const contents: SocialContent[] = [];
+  const summaryStyle = rows.some((row) => findExact(row, ['觀看次數']) !== undefined && findExact(row, ['瀏覽人數']) !== undefined && findExact(row, ['互動次數']) !== undefined);
   for (const [id, group] of groups) {
     const first = group[0];
     const caption = String(findExact(first, ['說明']) ?? findExact(first, ['標題']) ?? '').trim();
     const title = firstLine(findExact(first, ['標題']) ?? caption);
     const url = String(findExact(first, ['永久連結']) ?? '').trim();
-    // Facebook report rows are daily increments in this export, so aggregate each metric across report dates.
+    // Old Meta export can repeat one post per report date. The newer "內容 / 發佈時間 / 摘要" export is one row per post.
+    // sum() is therefore correct for the old daily-increment export and identical to the source value for the one-row summary export.
     const sum = (names: string[]) => group.reduce((total, row) => total + numeric(findExact(row, names)), 0);
-    const likes = sum(['按讚數','讚','心情']);
+    const likes = sum(['心情數','按讚數','讚','心情']);
     const comments = sum(['留言數','留言']);
     const shares = sum(['分享','分享次數']);
     const saves = sum(['儲存次數','收藏']);
-    const combined = sum(['心情、留言和分享次數','心情留言和分享次數','內容互動']);
+    const directEngagement = sum(['互動次數','內容互動']);
+    const combinedLegacy = sum(['心情、留言和分享次數','心情留言和分享次數']);
+    const viewsAvailable = findExact(first, ['觀看次數','瀏覽次數','影片觀看次數','播放次數','檢視次數','影片播放次數','影片瀏覽次數','Reels 播放次數','Reels瀏覽次數']) !== undefined;
+    // In the user's 2026 summary export, Facebook supplies both 曝光次數 and 瀏覽人數. Keep 瀏覽人數 as the people/reach-style metric and preserve its source note.
+    const reachAvailable = findExact(first, ['瀏覽人數','觸及人數','觸及']) !== undefined;
+    const impressionsAvailable = findExact(first, ['曝光次數','曝光']) !== undefined;
+    const publishedRaw = findExact(first, ['發佈時間','發布時間']);
     contents.push({
       id, nativeContentId: id, platform: 'Facebook', type: resolveType(findExact(first, ['貼文類型']), 'Facebook'),
       title: title || `Facebook 內容 ${id}`, caption, hashtags: hashtags(caption),
-      publishedAt: resolveDate(findExact(first, ['發佈時間','發布時間'])) || new Date().toISOString().slice(0, 10),
-      views: sum(['瀏覽次數','觀看次數','影片觀看次數','播放次數']), impressions: sum(['曝光次數','曝光']), reach: sum(['觸及人數','觸及']),
-      engagement: combined || likes + comments + shares + saves, likes, comments, shares, saves,
+      publishedAt: resolveDate(publishedRaw) || new Date().toISOString().slice(0, 10),
+      publishedAtRaw: resolveDateTime(publishedRaw) || resolveDate(publishedRaw),
+      views: sum(['觀看次數','瀏覽次數','影片觀看次數','播放次數','檢視次數','影片播放次數','影片瀏覽次數','Reels 播放次數','Reels瀏覽次數']),
+      impressions: sum(['曝光次數','曝光']),
+      reach: sum(['瀏覽人數','觸及人數','觸及']),
+      engagement: directEngagement || combinedLegacy || likes + comments + shares + saves,
+      likes, comments, shares, saves,
       clicks: sum(['連結點擊','點擊']), messages: 0, conversationCount: 0,
+      followersGained: sum(['淨追蹤者人數','追蹤人數']),
       campaignId: 'unassigned', campaignName: '尚未歸類', confidence: 'low', reviewStatus: 'suggested', url, permalink: url || null,
       classificationReasons: [], sourceRowCount: group.length,
-      sourceMetricNotes: ['Facebook Meta 匯出依貼文編號合併每日列', combined ? '「心情、留言和分享次數」為合併互動，無法從此檔拆出按讚／留言／分享個別值' : '此檔未提供完整互動拆分'],
+      metricAvailability: { views: viewsAvailable, reach: reachAvailable, impressions: impressionsAvailable, engagement: true },
+      sourceMetricNotes: [
+        summaryStyle ? 'Facebook Meta「內容 / 發佈時間 / 摘要」匯出：每篇內容一列' : 'Facebook Meta 匯出依貼文編號合併每日列',
+        viewsAvailable ? '觀看使用 Meta 匯出欄位「觀看次數」' : '此 Facebook 匯出檔沒有逐篇觀看欄位；顯示「未提供」，不把 0 當成零觀看',
+        reachAvailable ? (findExact(first, ['瀏覽人數']) !== undefined ? '人數型指標使用 Meta 匯出欄位「瀏覽人數」，Dashboard 置於觸及欄；跨平台合計不代表去重人數' : '使用 Meta 匯出的觸及欄位') : '此 Facebook 匯出檔沒有逐篇人數 / 觸及欄位',
+        directEngagement ? '有效互動優先使用 Meta 匯出欄位「互動次數」；心情、留言、分享、儲存仍分欄保留' : (combinedLegacy ? '互動使用舊版合併欄位' : '互動由可取得的心情＋留言＋分享＋儲存加總'),
+      ],
     });
   }
   return {
     kind: 'facebook-content-export', contents,
-    warnings: [`已辨識 Facebook Meta 原生匯出：${rows.length} 列依「貼文編號」合併為 ${contents.length} 則內容，不會把每日列誤當成不同貼文。`, '這份 Facebook 檔目前只提供「心情、留言和分享次數」等已匯出欄位；未出現在檔案中的 Views / Reach 不會被網站自行猜測。'],
+    warnings: summaryStyle
+      ? [`已辨識新版 Facebook Meta 摘要匯出：${rows.length} 列 → ${contents.length} 則內容。`, 'FB「觀看次數」會進 Views，不會再顯示 0；「瀏覽人數」保留為人數型／觸及欄，並標示來源語意。']
+      : [`已辨識 Facebook Meta 舊版逐日匯出：${rows.length} 列依「貼文編號」合併為 ${contents.length} 則內容，不會把每日列誤當成不同貼文。`, '檔案沒有提供的 Views / Reach 不會被網站自行猜測。'],
     sourceRows: rows.length,
   };
 }
@@ -241,11 +274,13 @@ function normalizeInstagramMetaExport(rows: Record<string, unknown>[]): MetaCont
       title: firstLine(caption) || `Instagram 內容 ${id}`, caption, hashtags: hashtags(caption),
       // IMPORTANT: Meta IG has both 發佈時間 and 日期=總期間; only 發佈時間 is publication date.
       publishedAt: resolveDate(findExact(row, ['發佈時間','發布時間'])) || new Date().toISOString().slice(0, 10),
+      publishedAtRaw: resolveDateTime(findExact(row, ['發佈時間','發布時間'])) || resolveDate(findExact(row, ['發佈時間','發布時間'])),
       views: numeric(findExact(row, ['瀏覽次數'])), reach: numeric(findExact(row, ['觸及人數'])), impressions: 0,
       engagement: likes + comments + shares + saves, likes, comments, shares, saves, clicks: 0, messages: 0, conversationCount: 0,
       followersGained: numeric(findExact(row, ['追蹤人數'])),
       campaignId: 'unassigned', campaignName: '尚未歸類', confidence: 'low' as const, reviewStatus: 'suggested' as const,
       url, permalink: url || null, classificationReasons: [], sourceRowCount: 1,
+      metricAvailability: { views: true, reach: true, impressions: false, engagement: true },
       sourceMetricNotes: ['Instagram Meta 原生匯出', '互動以按讚＋留言＋分享＋儲存計算；「追蹤人數」保留為該內容帶來的追蹤成長'],
     } satisfies SocialContent;
   });
@@ -338,14 +373,14 @@ export function parseThreadsInsightsText(text: string): { contents: SocialConten
   if (!normalized) return { contents: [], warnings: ['尚未貼上 Threads 洞察內容。'] };
   let blocks = normalized.split(/\n\s*\n|\n-{3,}\n/).map((x) => x.trim()).filter(Boolean);
   if (blocks.length === 1) {
-    const urls = [...normalized.matchAll(/https?:\/\/(?:www\.)?threads\.net\/[^\s]+/gi)];
+    const urls = [...normalized.matchAll(/https?:\/\/(?:www\.)?threads\.(?:net|com)\/[^\s]+/gi)];
     if (urls.length > 1) {
       blocks = urls.map((match, i) => normalized.slice(match.index ?? 0, urls[i + 1]?.index ?? normalized.length).trim());
     }
   }
   const contents: SocialContent[] = [];
   blocks.forEach((block, index) => {
-    const url = block.match(/https?:\/\/(?:www\.)?threads\.net\/[^\s]+/i)?.[0]?.replace(/[),，。]+$/, '') ?? '';
+    const url = block.match(/https?:\/\/(?:www\.)?threads\.(?:net|com)\/[^\s]+/i)?.[0]?.replace(/[),，。]+$/, '') ?? '';
     const views = parseLooseMetric(block, ['Views','瀏覽次數','瀏覽','觀看次數','觀看']);
     const likes = parseLooseMetric(block, ['Likes','按讚數','讚']);
     const comments = parseLooseMetric(block, ['Replies','回覆','留言數','留言']);
@@ -357,9 +392,9 @@ export function parseThreadsInsightsText(text: string): { contents: SocialConten
     const metricLine = /^(views?|likes?|replies?|reposts?|quotes?|瀏覽|觀看|按讚|讚|回覆|留言|轉發|引用)\b/i;
     const title = block.split('\n').map((x) => x.trim()).find((line) => line && !line.startsWith('http') && !metricLine.test(line) && !/^\d+[,.\d萬kK]*$/.test(line)) ?? `Threads 內容 ${index + 1}`;
     const native = url.match(/\/post\/([^/?#]+)/i)?.[1] ?? `paste-${index}-${Math.abs(hashText(block))}`;
-    contents.push({ id:`threads-${native}`, nativeContentId:native, platform:'Threads', type:'Threads Post', title:title.slice(0,180), caption:block, publishedAt, views, reach:0, impressions:views, engagement:likes+comments+shares+quotes, likes, comments, shares:shares+quotes, saves:0, clicks:0, messages:0, conversationCount:0, campaignId:'unassigned', campaignName:'尚未歸類', confidence:'low', reviewStatus:'suggested', url, permalink:url||null, hashtags:hashtags(block), classificationReasons:[], sourceMetricNotes:['從 Threads 洞察頁複製文字解析；Threads 未提供的 Reach 保留 0，不會拿 Views 冒充 Reach'] });
+    contents.push({ id:`threads-${native}`, nativeContentId:native, platform:'Threads', type:'Threads Post', title:title.slice(0,180), caption:block, publishedAt, views, reach:0, impressions:views, engagement:likes+comments+shares+quotes, likes, comments, shares:shares+quotes, saves:0, clicks:0, messages:0, conversationCount:0, campaignId:'unassigned', campaignName:'尚未歸類', confidence:'low', reviewStatus:'suggested', url, permalink:url||null, hashtags:hashtags(block), classificationReasons:[], metricAvailability:{views:true,reach:false,impressions:false,engagement:true}, sourceMetricNotes:['從 Threads Insights 網頁備援資料解析（Chrome 擷取器或文字備援）；Threads 未提供的 Reach 保留 0，不會拿 Views 冒充 Reach'] });
   });
-  const warnings = contents.length ? [`已從 Threads 頁面文字辨識 ${contents.length} 則內容；請在預覽確認數字。`, 'GitHub Pages 受瀏覽器同源限制，不能直接偷讀另一個已登入分頁；因此採「開啟洞察 → 複製頁面文字 → 貼上解析」或正式 Threads API 雙軌。'] : ['沒有從貼上的文字辨識出 Threads 內容。建議每篇至少包含貼文網址與 Views / Likes / Replies / Reposts 等數字。'];
+  const warnings = contents.length ? [`已從 Threads Insights 備援資料辨識 ${contents.length} 則內容；請在預覽確認數字。`, '正式模式優先使用 Threads User OAuth + Insights API；尚未完成 OAuth 時可使用 Chrome 擷取器讀取已登入頁面，不需要手動選取文字。'] : ['沒有從貼上的文字辨識出 Threads 內容。建議每篇至少包含貼文網址與 Views / Likes / Replies / Reposts 等數字。'];
   return { contents, warnings };
 }
 

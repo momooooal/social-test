@@ -1,0 +1,108 @@
+import type { Campaign, SocialContent } from './workspace-types';
+
+function norm(value: string) {
+  return value.normalize('NFKC').toLowerCase().replace(/[\s\u3000·•・_|｜:：,，。.!！?？【】\[\]()（）「」『』]/g, '');
+}
+
+function hash(value: string) {
+  let h = 2166136261;
+  for (let i = 0; i < value.length; i += 1) { h ^= value.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36);
+}
+
+const EVENT_SUFFIX = '(?:國際街舞大賽|國際大賽|大賽|競賽|錦標賽|公開賽|嘉年華|挑戰賽|運動會|體驗營|運動班|共學班)';
+const EVENT_RE = new RegExp(`(?:20\\d{2}\\s*)?(?:[A-Z][A-Z0-9-]{2,8}\\s+)?[\\u3400-\\u9fffA-Za-z0-9 .・·]{2,28}?${EVENT_SUFFIX}`, 'g');
+
+function cleanCandidate(raw: string) {
+  let value = raw.replace(/^[^\p{L}\p{N}]+/gu, '').trim();
+  value = value.replace(/^(20\d{2})\s+[A-Z][A-Z0-9-]{2,8}\s+(?=[\u3400-\u9fff])/i, '$1 ');
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function canonicalKey(name: string) {
+  return norm(name.replace(/^20\d{2}\s*/, '').replace(/^@?[A-Za-z0-9_.]+\s+/, ''));
+}
+
+function candidateNames(content: SocialContent) {
+  // Only inspect headline/first two caption lines + hashtags. Scanning the whole body creates junk
+  // such as “多元課程” or “後續挑戰賽” from explanatory paragraphs.
+  const headLines = (content.caption ?? '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean).slice(0, 5);
+  const head = `${content.title ?? ''}\n${headLines.join('\n')}`;
+  const found = new Set<string>();
+  for (const match of head.matchAll(EVENT_RE)) {
+    const value = cleanCandidate(match[0]);
+    if (value.length < 4 || value.length > 38) continue;
+    // A candidate should look like a named event, not a generic sentence fragment.
+    if (!/20\d{2}|高雄|臺灣|台灣|盃|賽|營|班/.test(value)) continue;
+    found.add(value);
+  }
+  for (const tag of `${content.title ?? ''} ${content.caption ?? ''}`.match(/#[^\s#，,。!！?？]{3,30}/g) ?? []) {
+    const value = cleanCandidate(tag.replace(/^#/, ''));
+    if (new RegExp(`${EVENT_SUFFIX}$`).test(value)) found.add(value);
+  }
+  return [...found];
+}
+
+function eventAcronym(content: SocialContent) {
+  const head = `${content.title ?? ''} ${(content.caption ?? '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean).slice(0, 5).join(' ')}`;
+  return head.match(/20\d{2}\s+([A-Z][A-Z0-9-]{2,8})\s+(?=[\u3400-\u9fff])/i)?.[1] ?? null;
+}
+
+function coreKeyword(name: string) {
+  return name
+    .replace(/^20\d{2}\s*/, '')
+    .replace(/^高雄市?/, '')
+    .replace(/(?:國際街舞大賽|國際大賽|大賽|競賽|錦標賽|公開賽|嘉年華|挑戰賽|運動會|體驗營|運動班|共學班)$/g, '')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+function existingMatches(candidate: string, campaigns: Campaign[]) {
+  const key = canonicalKey(candidate);
+  return campaigns.find((campaign) => canonicalKey(campaign.name) === key || (campaign.aliases ?? []).some((alias) => canonicalKey(alias) === key));
+}
+
+export interface CampaignDiscoveryResult {
+  campaigns: Campaign[];
+  evidence: Array<{ name: string; count: number; contentIds: string[] }>;
+}
+
+export function discoverCampaignsFromContents(contents: SocialContent[], existingCampaigns: Campaign[] = []): CampaignDiscoveryResult {
+  const groups = new Map<string, { name: string; ids: Set<string>; dates: string[]; aliases: Set<string> }>();
+  for (const content of contents) {
+    for (const name of candidateNames(content)) {
+      const key = canonicalKey(name); if (!key) continue;
+      const group = groups.get(key) ?? { name, ids: new Set<string>(), dates: [], aliases: new Set<string>() };
+      // Prefer the year-bearing official-looking form as display name.
+      if (/^20\d{2}/.test(name) && !/^20\d{2}/.test(group.name)) group.name = name;
+      group.ids.add(content.id);
+      if (content.publishedAt) group.dates.push(content.publishedAt.slice(0, 10));
+      const acronym = eventAcronym(content); if (acronym) group.aliases.add(acronym);
+      groups.set(key, group);
+    }
+  }
+
+  const campaigns: Campaign[] = [];
+  const evidence: CampaignDiscoveryResult['evidence'] = [];
+  for (const [key, group] of groups) {
+    const ids = [...group.ids];
+    const minEvidence = /^20\d{2}/.test(group.name) ? 2 : 3;
+    if (ids.length < minEvidence) continue; // conservative: reduce generic sentence fragments becoming activities
+    evidence.push({ name: group.name, count: ids.length, contentIds: ids });
+    if (existingMatches(group.name, [...existingCampaigns, ...campaigns])) continue;
+    const dates = [...group.dates].sort();
+    const core = coreKeyword(group.name);
+    campaigns.push({
+      id: `auto-${hash(key)}`,
+      name: group.name,
+      startDate: dates[0] ?? new Date().toISOString().slice(0, 10),
+      endDate: dates[dates.length - 1] ?? dates[0] ?? new Date().toISOString().slice(0, 10),
+      promotionStartDate: dates[0], promotionEndDate: dates[dates.length - 1],
+      keywords: [...new Set([group.name, core].filter((x) => x && x.length >= 2))],
+      hashtags: [`#${group.name.replace(/\s+/g, '')}`], aliases: [...group.aliases], landingUrls: [],
+      summary: `系統從 ${ids.length} 則內容辨識出的活動候選。請確認正式活動日期、宣傳期間與關鍵字。`,
+      autoGenerated: true, discoveryEvidenceCount: ids.length, discoverySource: 'content-cluster', needsReview: true, archived: false,
+    });
+  }
+  return { campaigns, evidence: evidence.sort((a, b) => b.count - a.count) };
+}

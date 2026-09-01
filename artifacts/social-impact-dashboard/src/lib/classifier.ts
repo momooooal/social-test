@@ -4,6 +4,8 @@ function norm(value: string | null | undefined) {
   return (value ?? '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+function compact(value: string | null | undefined) { return norm(value).replace(/\s+/g, ''); }
+
 function dateInside(date: string, start?: string, end?: string) {
   if (!date || !start || !end) return false;
   const d = date.slice(0, 10);
@@ -18,42 +20,45 @@ export interface ClassificationResult {
 }
 
 export function classifyContent(content: SocialContent, campaigns: Campaign[]): ClassificationResult {
-  const text = norm([content.title, content.caption, content.url, content.permalink, ...(content.hashtags ?? [])].filter(Boolean).join(' '));
+  const text = compact([content.title, content.caption, content.url, content.permalink, ...(content.hashtags ?? [])].filter(Boolean).join(' '));
+  const headlineLines = (content.caption ?? '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean).slice(0, 5);
+  const headline = compact([content.title, headlineLines.join(' ')].filter(Boolean).join(' '));
   let best: ClassificationResult = { campaignId: null, score: 0, confidence: 'low', reasons: [] };
 
   for (const campaign of campaigns.filter((item) => !item.archived)) {
     let score = 0;
+    let semanticScore = 0;
     const reasons: string[] = [];
-    const name = norm(campaign.name);
-    if (name && text.includes(name)) { score += 5; reasons.push('活動名稱命中 +5'); }
+    const add = (points: number, reason: string) => { score += points; semanticScore += points; reasons.push(reason); };
+    const name = compact(campaign.name);
+    if (name && text.includes(name)) add(5, '活動名稱命中 +5');
+    if (name && headline.includes(name)) add(4, '標題／文案前段命中活動名稱 +4');
 
     for (const alias of campaign.aliases ?? []) {
-      const key = norm(alias);
-      if (key && text.includes(key)) { score += 3; reasons.push(`別名「${alias}」命中 +3`); }
+      const key = compact(alias);
+      if (key && text.includes(key)) add(3, `別名「${alias}」命中 +3`);
+      if (key && headline.includes(key)) add(2, `前段別名「${alias}」命中 +2`);
     }
     for (const hashtag of campaign.hashtags ?? []) {
-      const key = norm(hashtag.replace(/^#/, ''));
-      if (key && text.includes(key)) { score += 3; reasons.push(`#${key} 命中 +3`); }
+      const key = compact(hashtag.replace(/^#/, ''));
+      if (key && text.includes(key)) add(3, `#${key} 命中 +3`);
     }
     for (const keyword of campaign.keywords ?? []) {
-      const key = norm(keyword);
-      if (key && text.includes(key)) { score += 2; reasons.push(`關鍵字「${keyword}」命中 +2`); }
+      const key = compact(keyword);
+      if (key && text.includes(key)) add(2, `關鍵字「${keyword}」命中 +2`);
+      if (key && headline.includes(key) && key.length >= 4) add(1, `前段關鍵字「${keyword}」命中 +1`);
     }
     for (const url of campaign.landingUrls ?? []) {
-      const key = norm(url);
-      if (key && text.includes(key)) { score += 4; reasons.push('活動網址命中 +4'); }
+      const key = compact(url);
+      if (key && text.includes(key)) add(4, '活動網址命中 +4');
     }
+    // Date is supporting evidence only. It must never classify an unrelated post by itself.
     const rangeStart = campaign.promotionStartDate ?? campaign.startDate;
     const rangeEnd = campaign.promotionEndDate ?? campaign.endDate;
-    if (dateInside(content.publishedAt, rangeStart, rangeEnd)) { score += 2; reasons.push('發布日在宣傳期間 +2'); }
+    if (semanticScore > 0 && dateInside(content.publishedAt, rangeStart, rangeEnd)) { score += 2; reasons.push('發布日在宣傳期間 +2'); }
 
-    if (score > best.score) {
-      best = {
-        campaignId: campaign.id,
-        score,
-        confidence: score >= 7 ? 'high' : score >= 4 ? 'medium' : 'low',
-        reasons,
-      };
+    if (semanticScore >= 2 && score > best.score) {
+      best = { campaignId: campaign.id, score, confidence: score >= 9 ? 'high' : score >= 5 ? 'medium' : 'low', reasons };
     }
   }
   return best;

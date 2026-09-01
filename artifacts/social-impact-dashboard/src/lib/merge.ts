@@ -1,4 +1,5 @@
 import { classifyContent } from './classifier';
+import { discoverCampaignsFromContents } from './campaign-discovery';
 import type { Campaign, ContentSnapshot, DataSource, MergeSummary, SocialContent, WorkspaceData } from './workspace-types';
 
 function normalizeUrl(url?: string | null) {
@@ -95,8 +96,17 @@ export function mergeWorkspaceData(
   snapshots: ContentSnapshot[],
   source: DataSource | string,
 ): { data: WorkspaceData; snapshots: ContentSnapshot[]; summary: MergeSummary } {
-  const campaigns = incoming.campaigns?.length ? mergeCampaigns(current.campaigns, incoming.campaigns) : current.campaigns;
-  const result = [...current.contents];
+  // The first real import must not silently coexist with DEMO content.
+  const base: WorkspaceData = current.isDemo && incoming.isDemo === false ? {
+    ...current, generatedAt: new Date().toISOString(), isDemo: false, monthlyMetrics: [], contents: [], campaigns: [], interactions: [], platforms: [],
+  } : current;
+
+  // Activity discovery runs inside the shared merge pipeline, so API sync and manual imports behave the same way.
+  // Only repeated event-like names (2+ pieces of content) can auto-create a candidate campaign.
+  const discovered = discoverCampaignsFromContents(incoming.contents ?? [], base.campaigns);
+  const proposedCampaigns = mergeCampaigns(incoming.campaigns ?? [], discovered.campaigns);
+  const campaigns = proposedCampaigns.length ? mergeCampaigns(base.campaigns, proposedCampaigns) : base.campaigns;
+  const result = [...base.contents];
   const indexByKey = new Map<string, number>();
   result.forEach((content, index) => indexByKey.set(stableContentKey(content), index));
 
@@ -117,7 +127,7 @@ export function mergeWorkspaceData(
     // If an existing row has never had a snapshot, preserve its pre-update metrics first.
     // This makes the first real update useful for growth comparison instead of losing the baseline.
     if (old && !latestByKey.has(key)) {
-      const baseline = snapshotFromContent(old, old.lastSource || 'backend', old.lastUpdatedAt || current.generatedAt || new Date().toISOString());
+      const baseline = snapshotFromContent(old, old.lastSource || 'backend', old.lastUpdatedAt || base.generatedAt || new Date().toISOString());
       nextSnapshots.push(baseline);
       latestByKey.set(key, baseline);
       summary.snapshotsAdded += 1;
@@ -150,15 +160,15 @@ export function mergeWorkspaceData(
 
   return {
     data: {
-      ...current,
+      ...base,
       ...incoming,
       generatedAt: new Date().toISOString(),
       isDemo: incoming.isDemo ?? false,
       campaigns,
       contents: result,
-      interactions: incoming.interactions ? mergeInteractions(current.interactions, incoming.interactions) : current.interactions,
-      monthlyMetrics: incoming.monthlyMetrics?.length ? mergeMonthlyMetrics(current.monthlyMetrics, incoming.monthlyMetrics) : current.monthlyMetrics,
-      platforms: incoming.platforms?.length ? mergePlatformMetrics(current.platforms, incoming.platforms) : current.platforms,
+      interactions: incoming.interactions ? mergeInteractions(base.interactions, incoming.interactions) : base.interactions,
+      monthlyMetrics: incoming.monthlyMetrics?.length ? mergeMonthlyMetrics(base.monthlyMetrics, incoming.monthlyMetrics) : base.monthlyMetrics,
+      platforms: incoming.platforms?.length ? mergePlatformMetrics(base.platforms, incoming.platforms) : base.platforms,
     },
     snapshots: nextSnapshots,
     summary,

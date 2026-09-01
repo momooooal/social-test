@@ -1,30 +1,31 @@
-import type { SocialContent } from './workspace-types';
+import type { Interaction, SocialContent } from './workspace-types';
 
 function normHeader(value: string) {
   return value.normalize('NFKC').toLowerCase().replace(/[\s_\-()（）/]/g, '');
 }
 
 const aliases: Record<string, string[]> = {
-  id: ['contentid','postid','mediaid','貼文id','內容id','id'],
-  nativeContentId: ['nativecontentid','postid','mediaid','貼文id','原生id'],
+  id: ['contentid','postid','mediaid','貼文id','貼文編號','內容id','id'],
+  nativeContentId: ['nativecontentid','postid','mediaid','貼文id','貼文編號','原生id'],
   platform: ['platform','平台','channel','來源平台'],
-  type: ['contenttype','type','類型','內容類型','posttype','mediatype'],
-  title: ['title','caption','text','message','內容','標題','貼文內容','文案'],
-  publishedAt: ['publishedat','publishtime','createdtime','date','日期','發布日期','發布時間','時間'],
+  type: ['contenttype','type','類型','內容類型','posttype','mediatype','貼文類型'],
+  title: ['title','caption','text','message','內容','標題','說明','貼文內容','文案'],
+  caption: ['caption','description','message','說明','內容','貼文內容','文案','標題'],
+  publishedAt: ['publishedat','publishtime','createdtime','發佈時間','發布時間','發布日期','建立時間','時間'],
   views: ['views','viewscount','videoviews','playcount','觀看次數','觀看','播放次數','瀏覽次數'],
   impressions: ['impressions','impression','曝光次數','曝光'],
   reach: ['reach','accountsreached','觸及','觸及人數'],
-  engagement: ['engagement','contentinteractions','interactions','互動','內容互動'],
-  likes: ['likes','likecount','reactions','按讚','讚','心情'],
-  comments: ['comments','commentcount','留言','回覆數'],
+  engagement: ['engagement','contentinteractions','interactions','互動','內容互動','心情留言和分享次數'],
+  likes: ['likes','likecount','reactions','按讚數','按讚','讚','心情'],
+  comments: ['comments','commentcount','留言數','留言','回覆數','replies'],
   shares: ['shares','sharecount','reposts','轉發','分享'],
-  saves: ['saves','savecount','收藏'],
+  saves: ['saves','savecount','儲存次數','收藏'],
   clicks: ['clicks','linkclicks','點擊','連結點擊'],
   messages: ['messages','messagecount','私訊','訊息數'],
   conversationCount: ['conversationcount','conversations','對話數','私訊對話'],
   campaignId: ['campaignid','活動id'],
   campaignName: ['campaignname','campaign','活動','活動名稱'],
-  url: ['permalink','url','link','網址','貼文網址','連結'],
+  url: ['permalink','永久連結','url','link','網址','貼文網址','連結'],
 };
 
 function scoreHeader(header: string, candidate: string) {
@@ -45,17 +46,36 @@ function findField(row: Record<string, unknown>, field: keyof typeof aliases) {
   return best && best.score >= 70 ? best.value : undefined;
 }
 
-function numeric(value: unknown) {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
-  const cleaned = String(value ?? '').replace(/[,，\s%]/g, '').trim();
-  const parsed = Number(cleaned);
-  return Number.isFinite(parsed) ? parsed : 0;
+function findExact(row: Record<string, unknown>, names: string[]) {
+  const keys = Object.keys(row);
+  for (const name of names) {
+    const wanted = normHeader(name);
+    const key = keys.find((item) => normHeader(item) === wanted);
+    if (key !== undefined) return row[key];
+  }
+  return undefined;
 }
 
-function resolvePlatform(value: unknown): SocialContent['platform'] {
-  const text = String(value ?? '').toLowerCase();
-  if (text.includes('instagram') || text === 'ig') return 'Instagram';
-  if (text.includes('thread')) return 'Threads';
+function numeric(value: unknown) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  let text = String(value ?? '').replace(/[,，\s%]/g, '').trim();
+  if (!text || text === '-' || /^n\/?a$/i.test(text)) return 0;
+  let multiplier = 1;
+  if (/萬$/.test(text)) { multiplier = 10000; text = text.replace(/萬$/, ''); }
+  else if (/k$/i.test(text)) { multiplier = 1000; text = text.replace(/k$/i, ''); }
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed * multiplier : 0;
+}
+
+function inferPlatform(row: Record<string, unknown>, explicit?: unknown): SocialContent['platform'] {
+  const value = String(explicit ?? '').toLowerCase();
+  if (value.includes('instagram') || value === 'ig') return 'Instagram';
+  if (value.includes('thread')) return 'Threads';
+  const headers = Object.keys(row).map(normHeader);
+  const type = String(findExact(row, ['貼文類型']) ?? '').toLowerCase();
+  if (headers.includes(normHeader('帳號用戶名稱')) || headers.includes(normHeader('Instagram 帳號編號')) || type.startsWith('ig')) return 'Instagram';
+  if (headers.includes(normHeader('粉絲專頁編號')) || headers.includes(normHeader('粉絲專頁名稱'))) return 'Facebook';
+  if (headers.some((h) => h.includes('threads')) || type.includes('thread')) return 'Threads';
   return 'Facebook';
 }
 
@@ -64,15 +84,30 @@ function resolveType(value: unknown, platform: SocialContent['platform']): Socia
   const text = String(value ?? '').toLowerCase();
   if (text.includes('reel')) return 'Reel';
   if (text.includes('story') || text.includes('限時')) return 'Story';
+  if (text.includes('直播') || text.includes('live')) return 'Live';
+  if (text.includes('影片') || text.includes('video')) return 'Video';
   return 'Post';
 }
 
 function resolveDate(value: unknown) {
   const raw = String(value ?? '').trim();
-  if (!raw) return new Date().toISOString().slice(0, 10);
+  if (!raw || raw === '總期間') return '';
+  let m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+\d{1,2}:\d{2})?/);
+  if (m) return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+  m = raw.match(/^(\d{4})[/.\-](\d{1,2})[/.\-](\d{1,2})/);
+  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
   const date = new Date(raw);
   if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
   return raw.replace(/[./]/g, '-').slice(0, 10);
+}
+
+function firstLine(value: unknown) {
+  const text = String(value ?? '').trim();
+  return (text.split(/\r?\n/).find(Boolean) ?? text).trim().slice(0, 180);
+}
+
+function hashtags(text: string) {
+  return [...new Set(text.match(/#[^\s#，,。!！?？]{2,50}/g) ?? [])];
 }
 
 export interface NormalizedRowResult {
@@ -82,9 +117,10 @@ export interface NormalizedRowResult {
 
 export function normalizeImportedContent(row: Record<string, unknown>, index: number): NormalizedRowResult {
   const warnings: string[] = [];
-  const platform = resolvePlatform(findField(row, 'platform'));
-  const title = String(findField(row, 'title') ?? '').trim();
-  if (!title) return { content: null, warnings: ['缺少可辨識的標題 / caption / 文案欄位'] };
+  const platform = inferPlatform(row, findField(row, 'platform'));
+  const caption = String(findField(row, 'caption') ?? findField(row, 'title') ?? '').trim();
+  const title = firstLine(findExact(row, ['標題']) ?? caption);
+  if (!title && !caption) return { content: null, warnings: ['缺少可辨識的標題 / caption / 說明 / 文案欄位'] };
   const rawId = findField(row, 'id');
   const nativeContentId = String(findField(row, 'nativeContentId') ?? rawId ?? '').trim() || null;
   const url = String(findField(row, 'url') ?? '').trim();
@@ -93,6 +129,13 @@ export function normalizeImportedContent(row: Record<string, unknown>, index: nu
   const impressionField = findField(row, 'impressions');
   if (viewsField === undefined && impressionField !== undefined) warnings.push('缺少 Views：保留 0，不會把曝光誤當觀看');
   if (reachField === undefined) warnings.push('缺少 Reach：觸及保留 0');
+  const likes = numeric(findField(row, 'likes'));
+  const comments = numeric(findField(row, 'comments'));
+  const shares = numeric(findField(row, 'shares'));
+  const saves = numeric(findField(row, 'saves'));
+  const directEngagement = findField(row, 'engagement');
+  const publishedRaw = findExact(row, ['發佈時間','發布時間','Published at','Publish time','Created time']) ?? findField(row, 'publishedAt');
+  const publishedAt = resolveDate(publishedRaw) || new Date().toISOString().slice(0, 10);
 
   const id = String(rawId ?? nativeContentId ?? `import-${Date.now()}-${index}`);
   const content: SocialContent = {
@@ -100,17 +143,15 @@ export function normalizeImportedContent(row: Record<string, unknown>, index: nu
     nativeContentId,
     platform,
     type: resolveType(findField(row, 'type'), platform),
-    title,
-    caption: title,
-    publishedAt: resolveDate(findField(row, 'publishedAt')),
+    title: title || caption.slice(0, 180),
+    caption: caption || title,
+    hashtags: hashtags(caption),
+    publishedAt,
     views: numeric(viewsField),
     impressions: numeric(impressionField),
     reach: numeric(reachField),
-    engagement: numeric(findField(row, 'engagement')),
-    likes: numeric(findField(row, 'likes')),
-    comments: numeric(findField(row, 'comments')),
-    shares: numeric(findField(row, 'shares')),
-    saves: numeric(findField(row, 'saves')),
+    engagement: directEngagement === undefined ? likes + comments + shares + saves : numeric(directEngagement),
+    likes, comments, shares, saves,
     clicks: numeric(findField(row, 'clicks')),
     messages: numeric(findField(row, 'messages')),
     conversationCount: numeric(findField(row, 'conversationCount')),
@@ -126,14 +167,105 @@ export function normalizeImportedContent(row: Record<string, unknown>, index: nu
 }
 
 export type ImportKind = 'contents' | 'interactions' | 'monthlyMetrics' | 'platforms';
+export type MetaExportKind = 'facebook-content-export' | 'instagram-content-export' | null;
 
-function normalizedHeaders(row: Record<string, unknown>) {
-  return Object.keys(row).map(normHeader);
+function normalizedHeaders(row: Record<string, unknown>) { return Object.keys(row).map(normHeader); }
+
+export function detectMetaExport(rows: Record<string, unknown>[]): MetaExportKind {
+  const first = rows[0]; if (!first) return null;
+  const headers = normalizedHeaders(first);
+  const has = (name: string) => headers.includes(normHeader(name));
+  if (has('貼文編號') && has('粉絲專頁編號') && has('粉絲專頁名稱') && has('永久連結') && has('發佈時間')) return 'facebook-content-export';
+  if (has('貼文編號') && has('帳號編號') && has('帳號用戶名稱') && has('永久連結') && has('瀏覽次數') && has('觸及人數')) return 'instagram-content-export';
+  return null;
+}
+
+export interface MetaContentImportResult {
+  kind: Exclude<MetaExportKind, null>;
+  contents: SocialContent[];
+  warnings: string[];
+  sourceRows: number;
+}
+
+/** Meta Business Suite Facebook export used by the user's real file: one post is repeated once per report date. */
+function normalizeFacebookMetaExport(rows: Record<string, unknown>[]): MetaContentImportResult {
+  const groups = new Map<string, Record<string, unknown>[]>();
+  rows.forEach((row, index) => {
+    const id = String(findExact(row, ['貼文編號']) ?? `fb-${index}`);
+    groups.set(id, [...(groups.get(id) ?? []), row]);
+  });
+  const contents: SocialContent[] = [];
+  for (const [id, group] of groups) {
+    const first = group[0];
+    const caption = String(findExact(first, ['說明']) ?? findExact(first, ['標題']) ?? '').trim();
+    const title = firstLine(findExact(first, ['標題']) ?? caption);
+    const url = String(findExact(first, ['永久連結']) ?? '').trim();
+    // Facebook report rows are daily increments in this export, so aggregate each metric across report dates.
+    const sum = (names: string[]) => group.reduce((total, row) => total + numeric(findExact(row, names)), 0);
+    const likes = sum(['按讚數','讚','心情']);
+    const comments = sum(['留言數','留言']);
+    const shares = sum(['分享','分享次數']);
+    const saves = sum(['儲存次數','收藏']);
+    const combined = sum(['心情、留言和分享次數','心情留言和分享次數','內容互動']);
+    contents.push({
+      id, nativeContentId: id, platform: 'Facebook', type: resolveType(findExact(first, ['貼文類型']), 'Facebook'),
+      title: title || `Facebook 內容 ${id}`, caption, hashtags: hashtags(caption),
+      publishedAt: resolveDate(findExact(first, ['發佈時間','發布時間'])) || new Date().toISOString().slice(0, 10),
+      views: sum(['瀏覽次數','觀看次數','影片觀看次數','播放次數']), impressions: sum(['曝光次數','曝光']), reach: sum(['觸及人數','觸及']),
+      engagement: combined || likes + comments + shares + saves, likes, comments, shares, saves,
+      clicks: sum(['連結點擊','點擊']), messages: 0, conversationCount: 0,
+      campaignId: 'unassigned', campaignName: '尚未歸類', confidence: 'low', reviewStatus: 'suggested', url, permalink: url || null,
+      classificationReasons: [], sourceRowCount: group.length,
+      sourceMetricNotes: ['Facebook Meta 匯出依貼文編號合併每日列', combined ? '「心情、留言和分享次數」為合併互動，無法從此檔拆出按讚／留言／分享個別值' : '此檔未提供完整互動拆分'],
+    });
+  }
+  return {
+    kind: 'facebook-content-export', contents,
+    warnings: [`已辨識 Facebook Meta 原生匯出：${rows.length} 列依「貼文編號」合併為 ${contents.length} 則內容，不會把每日列誤當成不同貼文。`, '這份 Facebook 檔目前只提供「心情、留言和分享次數」等已匯出欄位；未出現在檔案中的 Views / Reach 不會被網站自行猜測。'],
+    sourceRows: rows.length,
+  };
+}
+
+function normalizeInstagramMetaExport(rows: Record<string, unknown>[]): MetaContentImportResult {
+  const contents = rows.map((row, index) => {
+    const id = String(findExact(row, ['貼文編號']) ?? `ig-${index}`);
+    const caption = String(findExact(row, ['說明']) ?? '').trim();
+    const likes = numeric(findExact(row, ['按讚數']));
+    const comments = numeric(findExact(row, ['留言數']));
+    const shares = numeric(findExact(row, ['分享']));
+    const saves = numeric(findExact(row, ['儲存次數']));
+    const url = String(findExact(row, ['永久連結']) ?? '').trim();
+    const rawType = findExact(row, ['貼文類型']);
+    return {
+      id, nativeContentId: id, platform: 'Instagram' as const, type: resolveType(rawType, 'Instagram'),
+      title: firstLine(caption) || `Instagram 內容 ${id}`, caption, hashtags: hashtags(caption),
+      // IMPORTANT: Meta IG has both 發佈時間 and 日期=總期間; only 發佈時間 is publication date.
+      publishedAt: resolveDate(findExact(row, ['發佈時間','發布時間'])) || new Date().toISOString().slice(0, 10),
+      views: numeric(findExact(row, ['瀏覽次數'])), reach: numeric(findExact(row, ['觸及人數'])), impressions: 0,
+      engagement: likes + comments + shares + saves, likes, comments, shares, saves, clicks: 0, messages: 0, conversationCount: 0,
+      followersGained: numeric(findExact(row, ['追蹤人數'])),
+      campaignId: 'unassigned', campaignName: '尚未歸類', confidence: 'low' as const, reviewStatus: 'suggested' as const,
+      url, permalink: url || null, classificationReasons: [], sourceRowCount: 1,
+      sourceMetricNotes: ['Instagram Meta 原生匯出', '互動以按讚＋留言＋分享＋儲存計算；「追蹤人數」保留為該內容帶來的追蹤成長'],
+    } satisfies SocialContent;
+  });
+  return {
+    kind: 'instagram-content-export', contents,
+    warnings: [`已辨識 Instagram Meta 原生匯出：${contents.length} 則內容。`, 'IG 的「日期＝總期間」不會再被誤認成發布日期；系統固定使用「發佈時間」。', 'IG 檔沒有 platform 欄也不會再被誤判成 Facebook。'],
+    sourceRows: rows.length,
+  };
+}
+
+export function normalizeMetaContentExport(rows: Record<string, unknown>[]): MetaContentImportResult | null {
+  const kind = detectMetaExport(rows);
+  if (kind === 'facebook-content-export') return normalizeFacebookMetaExport(rows);
+  if (kind === 'instagram-content-export') return normalizeInstagramMetaExport(rows);
+  return null;
 }
 
 export function detectImportKind(rows: Record<string, unknown>[]): ImportKind {
-  const first = rows[0];
-  if (!first) return 'contents';
+  const first = rows[0]; if (!first) return 'contents';
+  if (detectMetaExport(rows)) return 'contents';
   const headers = normalizedHeaders(first);
   const has = (...terms: string[]) => terms.some((term) => headers.some((h) => h.includes(normHeader(term))));
   if (has('對話數', 'conversationcount', '訊息文字', '私訊內容', '問題主題') && has('source', '來源', 'platform', '平台')) return 'interactions';
@@ -144,11 +276,8 @@ export function detectImportKind(rows: Record<string, unknown>[]): ImportKind {
 
 function findAny(row: Record<string, unknown>, candidates: string[]) {
   let best: { score: number; value: unknown } | undefined;
-  for (const [header, value] of Object.entries(row)) {
-    for (const candidate of candidates) {
-      const score = scoreHeader(header, candidate);
-      if (!best || score > best.score) best = { score, value };
-    }
+  for (const [header, value] of Object.entries(row)) for (const candidate of candidates) {
+    const score = scoreHeader(header, candidate); if (!best || score > best.score) best = { score, value };
   }
   return best && best.score >= 70 ? best.value : undefined;
 }
@@ -157,22 +286,13 @@ export function normalizeImportedInteraction(row: Record<string, unknown>, index
   const text = String(findAny(row, ['text','message','body','訊息文字','私訊內容','留言內容','問題','內容']) ?? '').trim();
   if (!text) return null;
   const source = String(findAny(row, ['source','來源','platform','平台','channel']) ?? '手動匯入');
-  const createdAt = resolveDate(findAny(row, ['createdat','timestamp','date','時間','日期','建立時間']));
+  const createdAt = resolveDate(findAny(row, ['createdat','timestamp','date','時間','日期','建立時間'])) || new Date().toISOString().slice(0, 10);
   const campaignId = String(findAny(row, ['campaignid','活動id']) ?? '');
   const topic = String(findAny(row, ['topic','問題主題','分類','類別']) ?? '其他');
   return {
-    id: String(findAny(row, ['interactionid','messageid','id','訊息id']) ?? `interaction-${Date.now()}-${index}`),
-    source,
-    platform: resolvePlatform(source),
-    text,
-    createdAt,
-    campaignId: campaignId || null,
-    manualCampaignId: null,
-    topic,
-    suggestedTopic: topic,
-    manualTopic: null,
-    confidence: 'low' as const,
-    reviewStatus: 'suggested' as const,
+    id: String(findAny(row, ['interactionid','messageid','id','訊息id']) ?? `interaction-${Date.now()}-${index}`), source,
+    platform: inferPlatform(row, source), text, createdAt, campaignId: campaignId || null, manualCampaignId: null, topic, suggestedTopic: topic, manualTopic: null,
+    confidence: 'low' as const, reviewStatus: 'suggested' as const,
     anonymousConversationId: String(findAny(row, ['anonymousconversationid','conversationid','對話id','匿名對話id']) ?? '') || null,
     conversationCount: numeric(findAny(row, ['conversationcount','conversations','對話數'])) || 1,
     messageCount: numeric(findAny(row, ['messagecount','messages','訊息數','訊息則數'])) || 1,
@@ -180,32 +300,83 @@ export function normalizeImportedInteraction(row: Record<string, unknown>, index
 }
 
 export function normalizeImportedMonthlyMetric(row: Record<string, unknown>) {
-  const month = String(findAny(row, ['month','月份','年月']) ?? '').trim();
-  if (!month) return null;
-  return {
-    month,
-    views: numeric(findAny(row, aliases.views)),
-    reach: numeric(findAny(row, aliases.reach)),
-    engagement: numeric(findAny(row, aliases.engagement)),
-    messages: numeric(findAny(row, aliases.messages)),
-    followers: numeric(findAny(row, ['followers','followercount','粉絲','追蹤者','追蹤人數'])),
-  };
+  const month = String(findAny(row, ['month','月份','年月']) ?? '').trim(); if (!month) return null;
+  return { month, views: numeric(findAny(row, aliases.views)), reach: numeric(findAny(row, aliases.reach)), engagement: numeric(findAny(row, aliases.engagement)), messages: numeric(findAny(row, aliases.messages)), followers: numeric(findAny(row, ['followers','followercount','粉絲','追蹤者','追蹤人數'])) };
 }
 
 export function normalizeImportedPlatformMetric(row: Record<string, unknown>) {
-  const rawPlatform = findAny(row, ['platform','平台','channel','來源平台']);
-  if (rawPlatform === undefined) return null;
-  const platform = resolvePlatform(rawPlatform);
-  return {
-    platform,
-    followers: numeric(findAny(row, ['followers','followercount','粉絲','追蹤者','追蹤人數'])),
-    growth: numeric(findAny(row, ['growth','followgrowth','追蹤成長','粉絲成長','成長率'])),
-    views: numeric(findAny(row, aliases.views)),
-    reach: numeric(findAny(row, aliases.reach)),
-    engagement: numeric(findAny(row, aliases.engagement)),
-    posts: numeric(findAny(row, ['posts','postcount','貼文數','內容數'])),
-    reels: numeric(findAny(row, ['reels','reelcount','reels數'])),
-    stories: numeric(findAny(row, ['stories','storycount','限時動態數','story數'])),
-    messages: numeric(findAny(row, aliases.messages)),
-  };
+  const rawPlatform = findAny(row, ['platform','平台','channel','來源平台']); if (rawPlatform === undefined) return null;
+  const platform = inferPlatform(row, rawPlatform);
+  return { platform, followers: numeric(findAny(row, ['followers','followercount','粉絲','追蹤者','追蹤人數'])), growth: numeric(findAny(row, ['growth','followgrowth','追蹤成長','粉絲成長','成長率'])), views: numeric(findAny(row, aliases.views)), reach: numeric(findAny(row, aliases.reach)), engagement: numeric(findAny(row, aliases.engagement)), posts: numeric(findAny(row, ['posts','postcount','貼文數','內容數'])), reels: numeric(findAny(row, ['reels','reelcount','reels數'])), stories: numeric(findAny(row, ['stories','storycount','限時動態數','story數'])), messages: numeric(findAny(row, aliases.messages)) };
+}
+
+function parseLooseMetric(block: string, labels: string[]) {
+  const lines = block.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    for (const label of labels) {
+      const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const after = line.match(new RegExp(`^${escaped}\\s*[:：]?\\s*([\\d,.]+(?:\\.\\d+)?(?:萬|[kK])?)$`, 'i'));
+      if (after) return numeric(after[1]);
+      const before = line.match(new RegExp(`^([\\d,.]+(?:\\.\\d+)?(?:萬|[kK])?)\\s*${escaped}$`, 'i'));
+      if (before) return numeric(before[1]);
+      // Some copied pages add small separators or labels on the same line.
+      const looseAfter = line.match(new RegExp(`${escaped}\\s*[:：]?\\s*([\\d,.]+(?:\\.\\d+)?(?:萬|[kK])?)`, 'i'));
+      if (looseAfter) return numeric(looseAfter[1]);
+      const looseBefore = line.match(new RegExp(`([\\d,.]+(?:\\.\\d+)?(?:萬|[kK])?)\\s*${escaped}`, 'i'));
+      if (looseBefore) return numeric(looseBefore[1]);
+    }
+  }
+  return 0;
+}
+
+/**
+ * GitHub Pages cannot read another logged-in Threads tab because of browser same-origin rules.
+ * This parser accepts text copied from the visible Threads Insights page (or a .txt export).
+ */
+export function parseThreadsInsightsText(text: string): { contents: SocialContent[]; warnings: string[] } {
+  const normalized = text.replace(/\r/g, '').trim();
+  if (!normalized) return { contents: [], warnings: ['尚未貼上 Threads 洞察內容。'] };
+  let blocks = normalized.split(/\n\s*\n|\n-{3,}\n/).map((x) => x.trim()).filter(Boolean);
+  if (blocks.length === 1) {
+    const urls = [...normalized.matchAll(/https?:\/\/(?:www\.)?threads\.net\/[^\s]+/gi)];
+    if (urls.length > 1) {
+      blocks = urls.map((match, i) => normalized.slice(match.index ?? 0, urls[i + 1]?.index ?? normalized.length).trim());
+    }
+  }
+  const contents: SocialContent[] = [];
+  blocks.forEach((block, index) => {
+    const url = block.match(/https?:\/\/(?:www\.)?threads\.net\/[^\s]+/i)?.[0]?.replace(/[),，。]+$/, '') ?? '';
+    const views = parseLooseMetric(block, ['Views','瀏覽次數','瀏覽','觀看次數','觀看']);
+    const likes = parseLooseMetric(block, ['Likes','按讚數','讚']);
+    const comments = parseLooseMetric(block, ['Replies','回覆','留言數','留言']);
+    const shares = parseLooseMetric(block, ['Reposts','轉發','Repost']);
+    const quotes = parseLooseMetric(block, ['Quotes','引用']);
+    if (!url && !views && !likes && !comments && !shares && !quotes) return;
+    const dateMatch = block.match(/(20\d{2})[/.\-](\d{1,2})[/.\-](\d{1,2})/) ?? block.match(/(\d{1,2})\/(\d{1,2})\/(20\d{2})/);
+    const publishedAt = dateMatch ? resolveDate(dateMatch[0]) : new Date().toISOString().slice(0, 10);
+    const metricLine = /^(views?|likes?|replies?|reposts?|quotes?|瀏覽|觀看|按讚|讚|回覆|留言|轉發|引用)\b/i;
+    const title = block.split('\n').map((x) => x.trim()).find((line) => line && !line.startsWith('http') && !metricLine.test(line) && !/^\d+[,.\d萬kK]*$/.test(line)) ?? `Threads 內容 ${index + 1}`;
+    const native = url.match(/\/post\/([^/?#]+)/i)?.[1] ?? `paste-${index}-${Math.abs(hashText(block))}`;
+    contents.push({ id:`threads-${native}`, nativeContentId:native, platform:'Threads', type:'Threads Post', title:title.slice(0,180), caption:block, publishedAt, views, reach:0, impressions:views, engagement:likes+comments+shares+quotes, likes, comments, shares:shares+quotes, saves:0, clicks:0, messages:0, conversationCount:0, campaignId:'unassigned', campaignName:'尚未歸類', confidence:'low', reviewStatus:'suggested', url, permalink:url||null, hashtags:hashtags(block), classificationReasons:[], sourceMetricNotes:['從 Threads 洞察頁複製文字解析；Threads 未提供的 Reach 保留 0，不會拿 Views 冒充 Reach'] });
+  });
+  const warnings = contents.length ? [`已從 Threads 頁面文字辨識 ${contents.length} 則內容；請在預覽確認數字。`, 'GitHub Pages 受瀏覽器同源限制，不能直接偷讀另一個已登入分頁；因此採「開啟洞察 → 複製頁面文字 → 貼上解析」或正式 Threads API 雙軌。'] : ['沒有從貼上的文字辨識出 Threads 內容。建議每篇至少包含貼文網址與 Views / Likes / Replies / Reposts 等數字。'];
+  return { contents, warnings };
+}
+
+function hashText(value: string) { let h=0; for(let i=0;i<value.length;i++) h=((h<<5)-h)+value.charCodeAt(i)|0; return h; }
+
+/** One blank-line-separated block = one citizen conversation. Ten lines in one block = 1 conversation, 10 messages. */
+export function parseMessengerConversationText(text: string): Interaction[] {
+  const blocks = text.replace(/\r/g, '').split(/\n\s*\n|\n-{3,}\n/).map((x) => x.trim()).filter(Boolean);
+  return blocks.map((block, index) => {
+    const lines = block.split('\n').map((x) => x.trim()).filter(Boolean);
+    const dateText = block.match(/20\d{2}[/.\-]\d{1,2}[/.\-]\d{1,2}|\d{1,2}\/\d{1,2}\/20\d{2}/)?.[0];
+    return {
+      id: `messenger-paste-${Date.now()}-${index}-${Math.abs(hashText(block))}`,
+      source: 'Messenger 手動貼上', platform: 'Facebook', text: block,
+      createdAt: resolveDate(dateText) || new Date().toISOString().slice(0, 10), campaignId: null, manualCampaignId: null,
+      topic: '其他', suggestedTopic: '其他', manualTopic: null, confidence: 'low', reviewStatus: 'suggested',
+      anonymousConversationId: `manual-${Math.abs(hashText(block)).toString(36)}`, conversationCount: 1, messageCount: Math.max(1, lines.length),
+    };
+  });
 }

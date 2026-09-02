@@ -47,6 +47,8 @@
 
 若要自動同步，另外部署 `artifacts/api-server`，並在前端「設定」填入 backend URL。
 
+完整逐步設定請看：`SYNC_SETUP.md`。
+
 後端 Secrets 請依 `artifacts/api-server/.env.example` 設定，至少包含：
 
 - `BACKEND_PUBLIC_URL`

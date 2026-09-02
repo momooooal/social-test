@@ -25,7 +25,9 @@ app.use(
     },
   }),
 );
-const configuredOrigins = (process.env.DASHBOARD_ORIGIN || '').split(',').map((x) => x.trim()).filter(Boolean);
+const configuredOrigins = (process.env.DASHBOARD_ORIGIN || '').split(',').map((x) => x.trim()).filter(Boolean).map((value) => {
+  try { return new URL(value).origin; } catch { return value.replace(/\/$/, ''); }
+});
 app.use(cors(configuredOrigins.length ? { origin(origin, callback) {
   if (!origin || configuredOrigins.includes(origin)) return callback(null, true);
   return callback(new Error('Origin not allowed'));

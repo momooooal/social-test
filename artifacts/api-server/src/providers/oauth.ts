@@ -4,6 +4,9 @@ import { writeTokens } from './token-store';
 
 const metaVersion = process.env.META_API_VERSION || 'v25.0';
 const stateSecret = process.env.OAUTH_STATE_SECRET || process.env.META_APP_SECRET || (process.env.NODE_ENV === 'production' ? '' : 'development-only-change-me');
+const FACEBOOK_SCOPES = ['pages_show_list', 'pages_read_engagement'];
+const INSTAGRAM_SCOPES = ['pages_show_list', 'pages_read_engagement', 'instagram_basic', 'instagram_manage_insights'];
+const THREADS_SCOPES = ['threads_basic', 'threads_manage_insights'];
 
 function callbackUrl(platform: string) {
   const base = (process.env.BACKEND_PUBLIC_URL || '').replace(/\/$/, '');
@@ -37,7 +40,7 @@ export function oauthStartUrl(platform: 'facebook' | 'instagram' | 'threads') {
     const url = new URL('https://threads.net/oauth/authorize');
     url.searchParams.set('client_id', clientId);
     url.searchParams.set('redirect_uri', callbackUrl(platform));
-    url.searchParams.set('scope', 'threads_basic,threads_manage_insights');
+    url.searchParams.set('scope', THREADS_SCOPES.join(','));
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('state', makeState(platform));
     return url.toString();
@@ -49,10 +52,7 @@ export function oauthStartUrl(platform: 'facebook' | 'instagram' | 'threads') {
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('redirect_uri', callbackUrl(platform));
   url.searchParams.set('response_type', 'code');
-  const scopes = platform === 'instagram'
-    ? 'pages_show_list,pages_read_engagement,instagram_basic,instagram_manage_insights'
-    : 'pages_show_list,pages_read_engagement';
-  url.searchParams.set('scope', scopes);
+  url.searchParams.set('scope', (platform === 'instagram' ? INSTAGRAM_SCOPES : FACEBOOK_SCOPES).join(','));
   url.searchParams.set('state', makeState(platform));
   return url.toString();
 }
@@ -105,23 +105,25 @@ async function finishThreads(code: string) {
   const clientId = process.env.THREADS_APP_ID || process.env.META_APP_ID;
   const clientSecret = process.env.THREADS_APP_SECRET || process.env.META_APP_SECRET;
   if (!clientId || !clientSecret) throw new Error('THREADS_APP_ID / THREADS_APP_SECRET are required');
-  const short = await postForm<{ access_token: string; user_id?: string }>('https://graph.threads.net/oauth/access_token', {
+  const short = await postForm<{ access_token: string; user_id?: string; expires_in?: number }>('https://graph.threads.net/oauth/access_token', {
     client_id: clientId, client_secret: clientSecret, grant_type: 'authorization_code', redirect_uri: callbackUrl('threads'), code,
   });
   let accessToken = short.access_token;
+  let expiresIn = Number(short.expires_in || 60 * 60);
   try {
-    const long = await getJson<{ access_token: string }>('https://graph.threads.net/access_token', {
+    const long = await getJson<{ access_token: string; expires_in?: number }>('https://graph.threads.net/access_token', {
       grant_type: 'th_exchange_token', client_secret: clientSecret, access_token: short.access_token,
     });
     accessToken = long.access_token;
+    expiresIn = Number(long.expires_in || 60 * 24 * 60 * 60);
   } catch { /* a valid short token is still useful for initial testing */ }
   let threadsUsername: string | undefined;
   try {
     const profile = await getJson<{ id?: string; username?: string }>('https://graph.threads.net/me', { fields: 'id,username' }, accessToken);
     threadsUsername = profile.username;
-    await writeTokens({ threadsToken: accessToken, threadsUserId: profile.id || short.user_id, threadsUsername });
+    await writeTokens({ threadsToken: accessToken, threadsTokenExpiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(), threadsUserId: profile.id || short.user_id, threadsUsername });
   } catch {
-    await writeTokens({ threadsToken: accessToken, threadsUserId: short.user_id });
+    await writeTokens({ threadsToken: accessToken, threadsTokenExpiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(), threadsUserId: short.user_id });
   }
   return { userId: short.user_id, username: threadsUsername };
 }
@@ -129,4 +131,28 @@ async function finishThreads(code: string) {
 export async function oauthCallback(platform: 'facebook' | 'instagram' | 'threads', code: string, state: string) {
   if (!verifyState(state, platform)) throw new Error('Invalid or expired OAuth state');
   return platform === 'threads' ? finishThreads(code) : finishFacebookLike(platform, code);
+}
+
+export function oauthPublicConfig() {
+  const backendPublicUrl = (process.env.BACKEND_PUBLIC_URL || '').replace(/\/$/, '');
+  const callback = (platform: string) => backendPublicUrl ? `${backendPublicUrl}/api/social/auth/${platform}/callback` : '';
+  return {
+    backendPublicUrl,
+    callbacks: {
+      facebook: callback('facebook'),
+      instagram: callback('instagram'),
+      threads: callback('threads'),
+    },
+    scopes: {
+      facebook: FACEBOOK_SCOPES,
+      instagram: INSTAGRAM_SCOPES,
+      threads: THREADS_SCOPES,
+    },
+    configured: {
+      metaApp: Boolean(process.env.META_APP_ID && process.env.META_APP_SECRET),
+      threadsApp: Boolean((process.env.THREADS_APP_ID || process.env.META_APP_ID) && (process.env.THREADS_APP_SECRET || process.env.META_APP_SECRET)),
+      backendPublicUrl: Boolean(backendPublicUrl),
+      dashboardPublicUrl: Boolean(process.env.DASHBOARD_PUBLIC_URL),
+    },
+  };
 }

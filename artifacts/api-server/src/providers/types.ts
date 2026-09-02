@@ -31,6 +31,9 @@ export interface NormalizedContent {
   classificationReasons?: string[];
   lastSource?: string;
   lastUpdatedAt?: string;
+  sourceMetricNotes?: string[];
+  metricAvailability?: { views?: boolean; reach?: boolean; impressions?: boolean; engagement?: boolean };
+  threadsInsights?: { viewers?: number; capturedAt?: string; sourceUrl?: string };
 }
 
 export interface ProviderResult {
